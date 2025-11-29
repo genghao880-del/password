@@ -271,7 +271,14 @@ router.all('*', () => addCors(new Response('Not Found', { status: 404 })))
 
 export default {
   async fetch(request, env, ctx) {
-    // Try to serve static assets first
+    const url = new URL(request.url);
+    
+    // Handle API routes first
+    if (url.pathname.startsWith('/api/')) {
+      return router.handle(request, env, ctx);
+    }
+    
+    // Try to serve static assets
     if (env.ASSETS) {
       try {
         const assetResponse = await env.ASSETS.fetch(request);
@@ -288,10 +295,11 @@ export default {
           });
         }
       } catch (e) {
-        // Asset not found, continue to router
+        // Asset not found, continue
       }
     }
     
-    return router.handle(request, env, ctx)
+    // Fallback to router for other requests
+    return router.handle(request, env, ctx);
   }
 }
