@@ -1,0 +1,14 @@
+node_modules/
+.git
+.gitignore
+*.md
+deploy.sh
+deploy.bat
+setup-git.bat
+git-*.bat
+DEPLOYMENT_*.md
+MANUAL_DEPLOYMENT.md
+TESTING.md
+INITIALIZE_DATABASE.md
+INSTRUCTIONS.md
+CONTRIBUTING.md
