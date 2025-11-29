@@ -1,18 +1,16 @@
 name = "password"
 compatibility_date = "2024-05-01"
 
+# Minimal entry for Wrangler CI deployments. Points to a tiny worker
+# that prevents CI from failing due to missing entry-point.
+main = "worker-entry.js"
+
 # This section configures your D1 Database.
 [[d1_databases]]
 binding = "DB"
 database_name = "password"
 database_id = "523df01e-9a94-4972-bea8-7b12968f5395"
 
-# Functions directory
+# If you use Cloudflare Pages Functions, keep the functions directory present
+# but the CI 'wrangler deploy' will use the 'main' entry above.
 functions_dir = "functions"
-
-# Pages configuration
-[pages]
-main_branch = "main"
-
-[build.upload]
-main = "functions/api/[[path]].ts"
