@@ -22,7 +22,7 @@
 
 ## 数据库初始化（D1）
 - 初次部署后，Worker 会在接口访问时自动迁移。也可手动执行：
-  - 创建或更新 schema：参考根目录的 `schema.sql` 与 `schema-v2.sql`
+   - 创建或更新 schema：参考根目录的 `schema.sql`
 
 ## 安全与缓存策略
 - 严格安全头（CSP、HSTS、X-Frame-Options、Referrer-Policy 等）在 Worker 中统一设置。
