@@ -640,7 +640,10 @@ export default {
           if (assetResp.status === 200) {
             const headers = new Headers(assetResp.headers);
             headers.set('Content-Type', 'text/html; charset=utf-8');
-            headers.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+            headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+            headers.set('Pragma', 'no-cache');
+            headers.set('Expires', '0');
+            headers.set('X-Content-Type-Options', 'nosniff');
             return applySecurityHeaders(new Response(assetResp.body, { status: 200, headers }), request);
           }
         } catch (e) {

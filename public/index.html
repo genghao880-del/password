@@ -3,9 +3,10 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate, max-age=0" />
     <meta http-equiv="Pragma" content="no-cache" />
     <meta http-equiv="Expires" content="0" />
+    <meta name="version" content="2025-11-30-v2" />
     <title>PassFortress - Secure Password Manager</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
@@ -127,18 +128,38 @@
             }
 
             showToast(message, type = 'info') {
-                // 清除之前的定时器
+                // 清除之前的定时器和Toast
                 if (this.toastTimer) {
                     clearTimeout(this.toastTimer);
-                }
-                this.state.toastMessage = message;
-                this.state.toastType = type;
-                this.render();
-                // 设置新的定时器
-                this.toastTimer = setTimeout(() => {
-                    this.state.toastMessage = '';
                     this.toastTimer = null;
-                    this.render();
+                }
+                
+                const existingToast = document.getElementById('toast');
+                if (existingToast) {
+                    existingToast.remove();
+                }
+                
+                // 创建新Toast
+                const toast = document.createElement('div');
+                toast.id = 'toast';
+                toast.className = `fixed top-4 right-4 px-6 py-3 rounded-lg shadow-2xl text-white font-bold z-50 transition-opacity duration-300 ${
+                    type === 'success' ? 'bg-gradient-to-r from-green-600 to-emerald-600' :
+                    type === 'error' ? 'bg-gradient-to-r from-red-600 to-pink-600' :
+                    'bg-gradient-to-r from-blue-600 to-purple-600'
+                }`;
+                toast.textContent = message;
+                toast.style.opacity = '1';
+                document.body.appendChild(toast);
+                
+                // 3秒后淡出并移除
+                this.toastTimer = setTimeout(() => {
+                    toast.style.opacity = '0';
+                    setTimeout(() => {
+                        if (toast.parentNode) {
+                            toast.remove();
+                        }
+                    }, 300);
+                    this.toastTimer = null;
                 }, 3000);
             }
 
@@ -624,22 +645,7 @@
                     app.innerHTML = this.renderAppScreen();
                 }
                 
-                // Render toast if present
-                if (this.state.toastMessage) {
-                    const existingToast = document.getElementById('toast');
-                    if (existingToast) existingToast.remove();
-                    
-                    const toast = document.createElement('div');
-                    toast.id = 'toast';
-                    toast.className = `fixed top-4 right-4 px-6 py-3 rounded-lg shadow-2xl text-white font-bold z-50 animate-slideIn ${
-                        this.state.toastType === 'success' ? 'bg-gradient-to-r from-green-600 to-emerald-600' :
-                        this.state.toastType === 'error' ? 'bg-gradient-to-r from-red-600 to-pink-600' :
-                        'bg-gradient-to-r from-blue-600 to-purple-600'
-                    }`;
-                    toast.textContent = this.state.toastMessage;
-                    document.body.appendChild(toast);
-                }
-                                // Delete confirmation modal
+                // Delete confirmation modal
                                 const existingModal = document.getElementById('delete-modal');
                                 if (existingModal) existingModal.remove();
                                 if (this.state.showDeleteConfirm) {
