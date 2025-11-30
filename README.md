@@ -14,8 +14,11 @@
 为确保线上安全，请按以下步骤配置并验证：
 
 ### 环境变量（Workers → Settings → Variables）：
-- Secrets：`JWT_SECRET`（≥32位随机字符串）、`TURNSTILE_SECRET`（从 Turnstile 后台获取）。
-- Variables：`CUSTOM_DOMAIN`（你的自定义域名，如 `example.com`）。
+- Secrets：
+  - `JWT_SECRET`：用于 JWT token 签名的密钥，必须是至少 32 个字符的随机字符串（推荐使用更长的密钥以增强安全性）
+  - `TURNSTILE_SECRET`：从 Turnstile 后台获取的人机验证密钥
+- Variables：
+  - `CUSTOM_DOMAIN`：你的自定义域名（如 `example.com`），用于 CORS/CSP 等安全策略配置
 
 ### 前端站点密钥：
 在 `public/index.html` 中将 `CHANGE_ME_SITEKEY` 替换为你的 Turnstile Site Key。
@@ -26,8 +29,11 @@
 ### CORS：
 仅允许你的域名与 Worker 子域来源跨域读取响应。
 
-### 鉴权令牌：
-后端使用 `env.JWT_SECRET` 进行 HMAC-SHA256 签名与校验，缺失时拒绝颁发与验证。
+### 鉴权令牌 (JWT_SECRET)：
+- 后端使用 `env.JWT_SECRET` 进行 HMAC-SHA256 签名与校验
+- 缺失或无效的 JWT_SECRET 将导致登录/注册失败（返回 "Missing JWT_SECRET" 错误）
+- 建议定期轮换 JWT_SECRET 密钥以增强安全性
+- 更换 JWT_SECRET 将使所有现有会话失效，请在维护时段操作
 
 ### 防撞库：
 登录/注册限流（默认 10 次/分钟），错误 5 次触发 15 分钟临时锁定；成功清除计数。
@@ -37,7 +43,7 @@
 
 ## 验证清单
 
-- 未设置 `JWT_SECRET`：登录/注册应失败（安全失败）。
+- 未设置 `JWT_SECRET` 或值长度不足 32 字符：登录/注册应失败并返回 "Missing JWT_SECRET"（安全失败机制）
 - 已配置 Turnstile，但未携带 token：返回 403。
 - 连续 5 次错误密码：返回 423 临时锁定。
 - 非允许来源跨域：浏览器阻止读取响应（无 `Access-Control-Allow-Origin`）。

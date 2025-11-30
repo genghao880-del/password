@@ -144,38 +144,70 @@ async function generateTemp2FAToken(userId, env) {
   return `${header}.${payload}.${signature}`
 }
 
-// Verify JWT token
+// Verify JWT token with improved error handling
 function verifyToken(token, env) {
   try {
-    const [header, payload, signature] = token.split('.')
+    if (!token) return null
+    
+    const parts = token.split('.')
+    if (parts.length !== 3) return null
+    
+    const [header, payload, signature] = parts
     const decoded = JSON.parse(atob(payload))
+    
     if (decoded.exp < Math.floor(Date.now() / 1000)) {
       return null
     }
-    const secret = env?.JWT_SECRET || ''
-    if (!secret) return null
+    
+    const secret = env?.JWT_SECRET
+    if (!secret) {
+      console.error('JWT_SECRET is not configured in environment variables')
+      return null
+    }
+    
     // verify signature
     return crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['verify'])
       .then(key => crypto.subtle.verify('HMAC', key, base64ToBytes(signature), new TextEncoder().encode(`${header}.${payload}`)))
       .then(ok => ok ? decoded.userId : null)
-      .catch(() => null)
-  } catch {
+      .catch(err => {
+        console.error('JWT verification failed:', err)
+        return null
+      })
+  } catch (err) {
+    console.error('Error parsing JWT token:', err)
     return null
   }
 }
 
 function decodeToken(token, env) {
   try {
-    const [header, payload, signature] = token.split('.')
+    if (!token) return null
+    
+    const parts = token.split('.')
+    if (parts.length !== 3) return null
+    
+    const [header, payload, signature] = parts
     const decoded = JSON.parse(atob(payload))
+    
     if (decoded.exp < Math.floor(Date.now() / 1000)) return null
-    const secret = env?.JWT_SECRET || ''
-    if (!secret) return null
+    
+    const secret = env?.JWT_SECRET
+    if (!secret) {
+      console.error('JWT_SECRET is not configured in environment variables')
+      return null
+    }
+    
     return crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['verify'])
       .then(key => crypto.subtle.verify('HMAC', key, base64ToBytes(signature), new TextEncoder().encode(`${header}.${payload}`)))
       .then(ok => ok ? decoded : null)
-      .catch(() => null)
-  } catch { return null }
+      .catch(err => {
+        console.error('JWT decoding failed:', err)
+        return null
+      })
+  } catch (err) {
+    console.error('Error decoding JWT token:', err)
+    return null
+  }
 }
 
 // Extract user from request
@@ -886,17 +918,32 @@ router.all('*', (request, env) => addCors(new Response('Not Found', { status: 40
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    // Force HTTPS for custom domain
-    if (url.protocol === 'http:' && env?.CUSTOM_DOMAIN && url.hostname === env.CUSTOM_DOMAIN) {
-      const httpsUrl = new URL(request.url)
-      httpsUrl.protocol = 'https:'
-      return new Response(null, { status: 301, headers: { Location: httpsUrl.toString() } })
-    }
     
-    // Rate limit & API 优先
-    let rateInfo = null
-    // Use our modular router for API requests
+    // Check for required environment variables first
     if (url.pathname.startsWith('/api/')) {
+      if (!env.JWT_SECRET) {
+        console.error('Critical error: JWT_SECRET is not configured')
+        return new Response(
+          JSON.stringify({ 
+            error: 'Server configuration error', 
+            message: 'JWT_SECRET environment variable is not configured. This is required for authentication. Please contact the administrator.' 
+          }), 
+          { 
+            status: 500, 
+            headers: { 'Content-Type': 'application/json' } 
+          }
+        )
+      }
+      
+      // Force HTTPS for custom domain
+      if (url.protocol === 'http:' && env?.CUSTOM_DOMAIN && url.hostname === env.CUSTOM_DOMAIN) {
+        const httpsUrl = new URL(request.url)
+        httpsUrl.protocol = 'https:'
+        return new Response(null, { status: 301, headers: { Location: httpsUrl.toString() } })
+      }
+      
+      // Rate limit & API 优先
+      let rateInfo = null
       rateInfo = checkRateLimit(request)
       if (!rateInfo.allowed) {
         return applySecurityHeaders(new Response(JSON.stringify({ error: 'Rate limit exceeded' }), { status: 429, headers: { 'Content-Type': 'application/json' } }), request, rateInfo, env)
