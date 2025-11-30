@@ -58,6 +58,14 @@
             from { opacity: 0; transform: translateX(100px); }
             to { opacity: 1; transform: translateX(0); }
         }
+        /* Client specific tweaks */
+        body.client-desktop .btn-hover { transition: transform .12s ease, box-shadow .12s ease; }
+        body.client-desktop .btn-hover:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(0,0,0,.25); }
+        body.client-mobile .btn-hover { transition: none; }
+        /* Generator panel overflow guard */
+        .panel-scroll { overflow: hidden; }
+        .panel-scroll .panel-inner { max-height: 420px; overflow-y: auto; word-break: break-word; }
+        .mono-wrap { word-break: break-all; }
     </style>
 </head>
 <body class="text-gray-200">
@@ -130,6 +138,9 @@
                 else if (/Firefox/i.test(ua)) browser = 'Firefox';
                 else if (/Edg/i.test(ua)) browser = 'Edge';
                 
+                // apply body class for client-specific CSS
+                if (isMobile) { document.body.classList.add('client-mobile'); document.body.classList.remove('client-desktop'); }
+                else { document.body.classList.add('client-desktop'); document.body.classList.remove('client-mobile'); }
                 return { isMobile, platform, browser };
             }
 
@@ -390,21 +401,20 @@
             }
 
             async confirmDelete() {
-                const id = this.state.deleteTargetId;
-                if (!id) { this.state.showDeleteConfirm = false; this.render(); return; }
                 try {
-                    const res = await fetch(`${API_BASE}/api/passwords/${id}`, {
-                        method: 'DELETE',
-                        headers: { 'Authorization': `Bearer ${this.state.token}` }
-                    });
-                    if (res.ok) {
-                        await this.loadPasswords();
-                        this.showToast('Deleted ✅', 'success');
+                    if (this.state.deleteTargetId) {
+                        const id = this.state.deleteTargetId;
+                        const res = await fetch(`${API_BASE}/api/passwords/${id}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${this.state.token}` } });
+                        if (res.ok) { await this.loadPasswords(); this.showToast('删除成功 ✅', 'success'); }
+                        else { this.showToast('删除失败', 'error'); }
                     } else {
-                        this.showToast('Delete failed', 'error');
+                        await Promise.all(this.state.selectedIds.map(id => fetch(`${API_BASE}/api/passwords/${id}`, { method:'DELETE', headers:{'Authorization':`Bearer ${this.state.token}`} })));
+                        await this.loadPasswords();
+                        this.clearSelection();
+                        this.showToast('批量删除完成 ✅', 'success');
                     }
                 } catch (e) {
-                    this.showToast('Error: ' + e.message, 'error');
+                    this.showToast('删除错误: ' + e.message, 'error');
                 }
                 this.state.showDeleteConfirm = false;
                 this.state.deleteTargetId = null;
@@ -488,10 +498,11 @@
 
             bulkDelete() {
                 if (this.state.selectedIds.length === 0) return;
-                if (!confirm(`确定删除选中的 ${this.state.selectedIds.length} 条密码?`)) return;
-                Promise.all(this.state.selectedIds.map(id => fetch(`${API_BASE}/api/passwords/${id}`, { method:'DELETE', headers:{'Authorization':`Bearer ${this.state.token}`} })))
-                    .then(()=> this.loadPasswords().then(()=> { this.showToast('批量删除完成', 'success'); this.clearSelection(); }))
-                    .catch(e=> this.showToast('批量删除失败: '+e.message,'error'));
+                this.state.showDeleteConfirm = true;
+                this.state.deleteTargetId = null;
+                this.state.deletePromptTitle = '确认批量删除';
+                this.state.deletePromptText = `将删除选中的 ${this.state.selectedIds.length} 条密码。该操作不可恢复。`;
+                this.render();
             }
 
             bulkExport() {
@@ -664,25 +675,25 @@
                     app.innerHTML = this.renderAppScreen();
                 }
                 
-                // Delete confirmation modal
-                                const existingModal = document.getElementById('delete-modal');
-                                if (existingModal) existingModal.remove();
-                                if (this.state.showDeleteConfirm) {
-                                        const modal = document.createElement('div');
-                                        modal.id = 'delete-modal';
-                                        modal.className = 'fixed inset-0 flex items-center justify-center z-50';
-                                        modal.innerHTML = `
-                                            <div class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
-                                            <div class="relative bg-[#0F1E2E] border border-[#F48120] rounded-xl p-6 w-[340px] shadow-2xl animate-slideIn">
-                                                <h3 class="text-xl font-bold text-white mb-2">Confirm Deletion</h3>
-                                                <p class="text-sm text-gray-300 mb-4">This action will permanently remove the password entry.</p>
-                                                <div class="flex gap-3">
-                                                    <button onclick="manager.confirmDelete()" class="flex-1 bg-gradient-to-r from-red-600 to-orange-600 hover:from-red-700 hover:to-orange-700 text-white font-bold py-2 rounded-lg transition">Delete</button>
-                                                    <button onclick="manager.cancelDelete()" class="flex-1 bg-slate-600 hover:bg-slate-500 text-white font-bold py-2 rounded-lg transition">Cancel</button>
-                                                </div>
-                                            </div>`;
-                                        document.body.appendChild(modal);
-                                }
+                // Unified Delete confirmation modal
+                const existingModal = document.getElementById('delete-modal');
+                if (existingModal) existingModal.remove();
+                if (this.state.showDeleteConfirm) {
+                    const modal = document.createElement('div');
+                    modal.id = 'delete-modal';
+                    modal.className = 'fixed inset-0 flex items-center justify-center z-50';
+                    modal.innerHTML = `
+                        <div class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+                        <div class="relative bg-[#0F1E2E] border border-[#F48120] rounded-xl p-6 w-[360px] shadow-2xl animate-slideIn">
+                            <h3 class="text-xl font-bold text-white mb-2">${this.state.deletePromptTitle || '确认删除'}</h3>
+                            <p class="text-sm text-gray-300 mb-4">${this.state.deletePromptText || '该操作将永久移除该密码条目。'}</p>
+                            <div class="flex gap-3">
+                                <button onclick="manager.confirmDelete()" class="btn-hover flex-1 bg-gradient-to-r from-red-600 to-orange-600 text-white font-bold py-2 rounded-lg transition">删除</button>
+                                <button onclick="manager.cancelDelete()" class="btn-hover flex-1 bg-slate-600 text-white font-bold py-2 rounded-lg transition">取消</button>
+                            </div>
+                        </div>`;
+                    document.body.appendChild(modal);
+                }
                                 // 2FA 模态
                                 const existing2FA = document.getElementById('twofa-modal');
                                 if (existing2FA) existing2FA.remove();
@@ -797,19 +808,19 @@
                                     <p class="text-gray-500 text-[10px] mt-0.5">${this.state.clientInfo.isMobile ? '📱' : '💻'} ${this.state.clientInfo.platform} · ${this.state.clientInfo.browser}</p>
                                 </div>
                                 <div class="flex flex-wrap gap-1.5">
-                                    <button onclick="manager.toggleTheme()" class="bg-slate-700 hover:bg-slate-600 text-white text-xs py-1.5 px-2.5 rounded-lg transition" title="主题">
+                                    <button onclick="manager.toggleTheme()" class="btn-hover bg-slate-700 hover:bg-slate-600 text-white text-xs py-1.5 px-2.5 rounded-lg transition" title="主题">
                                         ${this.state.theme === 'dark' ? '☀️' : '🌙'}
                                     </button>
-                                    <button onclick="manager.exportPasswords()" class="bg-blue-600 hover:bg-blue-700 text-white text-xs py-1.5 px-2.5 rounded-lg transition" title="导出">
+                                    <button onclick="manager.exportPasswords()" class="btn-hover bg-blue-600 hover:bg-blue-700 text-white text-xs py-1.5 px-2.5 rounded-lg transition" title="导出">
                                         📦
                                     </button>
-                                    <button onclick="manager.importPasswords()" class="bg-green-600 hover:bg-green-700 text-white text-xs py-1.5 px-2.5 rounded-lg transition" title="导入">
+                                    <button onclick="manager.importPasswords()" class="btn-hover bg-green-600 hover:bg-green-700 text-white text-xs py-1.5 px-2.5 rounded-lg transition" title="导入">
                                         📥
                                     </button>
-                                    <button onclick="manager.open2FA()" class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs py-1.5 px-2.5 rounded-lg transition" title="2FA">
+                                    <button onclick="manager.open2FA()" class="btn-hover bg-indigo-600 hover:bg-indigo-700 text-white text-xs py-1.5 px-2.5 rounded-lg transition" title="2FA">
                                         ${this.state.twoFAEnabled ? '🔒' : '🔐'}
                                     </button>
-                                    <button onclick="manager.logout()" class="bg-red-600 hover:bg-red-700 text-white text-xs py-1.5 px-2.5 rounded-lg transition" title="退出">🚪</button>
+                                    <button onclick="manager.logout()" class="btn-hover bg-red-600 hover:bg-red-700 text-white text-xs py-1.5 px-2.5 rounded-lg transition" title="退出">🚪</button>
                                 </div>
                             </div>
                             <div class="flex flex-col lg:flex-row gap-6">
@@ -875,7 +886,7 @@
                                 </div>
                                 <!-- Right: Generator + Save/Edit -->
                                 <div class="w-full lg:w-[420px] space-y-6">
-                                    <div class="bg-slate-800 border border-purple-500 rounded-lg p-6 shadow-2xl">
+                                    <div class="panel-scroll bg-slate-800 border border-purple-500 rounded-lg p-6 shadow-2xl">
                                         <div class="flex justify-between items-center mb-4">
                                             <h2 class="text-2xl font-bold text-white">🎲 生成强密码</h2>
                                             <button onclick="manager.state.showSettings = !manager.state.showSettings; manager.render()" class="text-purple-300 hover:text-purple-100">
@@ -883,7 +894,7 @@
                                             </button>
                                         </div>
                                         ${this.state.showSettings ? `
-                                            <div class="bg-slate-700 p-4 rounded-lg mb-4 space-y-3">
+                                            <div class="panel-inner bg-slate-700 p-4 rounded-lg mb-4 space-y-3">
                                                 <div class="flex items-center justify-between">
                                                     <label class="text-white">长度: ${this.state.passwordLength}</label>
                                                     <input type="range" min="8" max="32" value="${this.state.passwordLength}" onchange="manager.state.passwordLength = parseInt(this.value); manager.render()" class="w-48" />
@@ -916,10 +927,10 @@
                                                     </div>
                                                 ` : ''}
                                                 <div class="flex gap-2">
-                                                    <input type="${this.state.showGeneratedPassword ? 'text' : 'password'}" value="${this.state.generatedPassword}" readonly class="flex-1 bg-slate-700 text-white p-3 rounded-lg border border-purple-500 font-mono" />
-                                                    <button onclick="manager.toggleGeneratedPasswordVisibility()" class="bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-4 rounded-lg transition" title="${this.state.showGeneratedPassword ? '隐藏' : '显示'}">${this.state.showGeneratedPassword ? '👁️' : '🔒'}</button>
-                                                    <button onclick="manager.copyToClipboard('${this.state.generatedPassword}')" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg transition" title="复制">📋</button>
-                                                    <button onclick="manager.useGeneratedPassword()" class="bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded-lg transition" title="使用">✅</button>
+                                                    <input type="${this.state.showGeneratedPassword ? 'text' : 'password'}" value="${this.state.generatedPassword}" readonly class="mono-wrap flex-1 bg-slate-700 text-white p-3 rounded-lg border border-purple-500 font-mono" />
+                                                    <button onclick="manager.toggleGeneratedPasswordVisibility()" class="btn-hover bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-4 rounded-lg transition" title="${this.state.showGeneratedPassword ? '隐藏' : '显示'}">${this.state.showGeneratedPassword ? '👁️' : '🔒'}</button>
+                                                    <button onclick="manager.copyToClipboard('${this.state.generatedPassword}')" class="btn-hover bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg transition" title="复制">📋</button>
+                                                    <button onclick="manager.useGeneratedPassword()" class="btn-hover bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded-lg transition" title="使用">✅</button>
                                                 </div>
                                             </div>
                                         ` : ''}
