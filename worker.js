@@ -1,5 +1,9 @@
 import { Router } from 'itty-router'
 
+// Import our modular routes
+import authRoutes from './src/routes/authRoutes'
+import passwordRoutes from './src/routes/passwordRoutes'
+
 const router = Router()
 
 // ============ Lazy DB Migration for 2FA Columns ============
@@ -182,26 +186,105 @@ async function getUserFromRequest(request, env) {
   return await verifyToken(token, env)
 }
 
-// Encryption (simple XOR for demo - use AES in production)
-function encryptPassword(password, key) {
-  const encoder = new TextEncoder()
-  const data = encoder.encode(password)
-  const keyData = encoder.encode(key.slice(0, 32))
-  const encrypted = new Uint8Array(data.length)
-  for (let i = 0; i < data.length; i++) {
-    encrypted[i] = data[i] ^ keyData[i % keyData.length]
+// Encryption (updated to use AES-GCM for production)
+async function encryptPassword(password, keyMaterial) {
+  // Create a key from the key material
+  const keyBytes = new TextEncoder().encode(keyMaterial);
+  const key = await crypto.subtle.importKey(
+    'raw',
+    keyBytes,
+    { name: 'PBKDF2' },
+    false,
+    ['deriveKey']
+  );
+
+  // Derive an AES-GCM key
+  const aesKey = await crypto.subtle.deriveKey(
+    {
+      name: 'PBKDF2',
+      salt: new TextEncoder().encode('salt_for_passfortress'),
+      iterations: 100000,
+      hash: 'SHA-256'
+    },
+    key,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt']
+  );
+
+  // Generate a random IV
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+
+  // Encrypt the password
+  const plaintextBytes = new TextEncoder().encode(password);
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv },
+    aesKey,
+    plaintextBytes
+  );
+
+  // Combine IV and ciphertext
+  const combined = new Uint8Array(iv.length + ciphertext.byteLength);
+  combined.set(iv, 0);
+  combined.set(new Uint8Array(ciphertext), iv.length);
+
+  // Return as base64
+  const bytes = new Uint8Array(combined.buffer);
+  let binaryString = '';
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binaryString += String.fromCharCode(bytes[i]);
   }
-  return bytesToBase64(encrypted)
+  return btoa(binaryString);
 }
 
-function decryptPassword(encrypted, key) {
-  const encrypted_bytes = base64ToBytes(encrypted)
-  const keyData = new TextEncoder().encode(key.slice(0, 32))
-  const decrypted = new Uint8Array(encrypted_bytes.length)
-  for (let i = 0; i < encrypted_bytes.length; i++) {
-    decrypted[i] = encrypted_bytes[i] ^ keyData[i % keyData.length]
+async function decryptPassword(encryptedPassword, keyMaterial) {
+  // Create a key from the key material
+  const keyBytes = new TextEncoder().encode(keyMaterial);
+  const key = await crypto.subtle.importKey(
+    'raw',
+    keyBytes,
+    { name: 'PBKDF2' },
+    false,
+    ['deriveKey']
+  );
+
+  // Derive the AES-GCM key
+  const aesKey = await crypto.subtle.deriveKey(
+    {
+      name: 'PBKDF2',
+      salt: new TextEncoder().encode('salt_for_passfortress'),
+      iterations: 100000,
+      hash: 'SHA-256'
+    },
+    key,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['decrypt']
+  );
+
+  // Decode from base64
+  const binaryString = atob(encryptedPassword);
+  const bytes = new Uint8Array(binaryString.length);
+  for (let i = 0; i < binaryString.length; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
   }
-  return new TextDecoder().decode(decrypted)
+  const combined = bytes.buffer;
+
+  const combinedBytes = new Uint8Array(combined);
+
+  // Extract IV and ciphertext
+  const iv = combinedBytes.slice(0, 12);
+  const ciphertext = combinedBytes.slice(12);
+
+  // Decrypt
+  const plaintextBuffer = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv },
+    aesKey,
+    ciphertext
+  );
+
+  // Convert to string
+  return new TextDecoder().decode(plaintextBuffer);
 }
 
 // ============ TOTP 2FA Helpers ============
@@ -793,6 +876,10 @@ router.post('/api/auth/2fa/recovery/verify', async (request, env) => {
   }
 })
 
+// Mount our modular routes
+router.mount('/api/auth', authRoutes)
+router.mount('/api/passwords', passwordRoutes)
+
 // Fallback
 router.all('*', (request, env) => addCors(new Response('Not Found', { status: 404 }), request, null, env))
 
@@ -808,6 +895,7 @@ export default {
     
     // Rate limit & API 优先
     let rateInfo = null
+    // Use our modular router for API requests
     if (url.pathname.startsWith('/api/')) {
       rateInfo = checkRateLimit(request)
       if (!rateInfo.allowed) {
