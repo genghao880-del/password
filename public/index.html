@@ -74,6 +74,13 @@
                     favorites: JSON.parse(localStorage.getItem('favorites') || '[]'), // Favorite passwords
                     showSettings: false, // Show password generator settings
                     enable2FA: false // Two-factor authentication flag
+                    ,twoFAEnabled: false
+                    ,show2FAModal: false
+                    ,twoFAStage: 'idle' // idle | init | activate | verify
+                    ,twoFASecret: ''
+                    ,twoFAOtpAuth: ''
+                    ,twoFATempToken: ''
+                    ,twoFACode: ''
                     ,showDeleteConfirm: false
                     ,deleteTargetId: null
                     ,gptEnabled: true
@@ -158,8 +165,16 @@
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ email: this.state.email, password: this.state.password })
                     });
-                    if (res.ok) {
-                        const data = await res.json();
+                    const data = await res.json();
+                    if (res.ok && data.require2FA) {
+                        // 进入二次验证阶段
+                        this.state.twoFAStage = 'verify';
+                        this.state.twoFATempToken = data.tempToken;
+                        this.state.show2FAModal = true;
+                        this.render();
+                        return;
+                    }
+                    if (res.ok && data.token) {
                         this.state.token = data.token;
                         this.state.user = data.user;
                         localStorage.setItem('token', data.token);
@@ -170,8 +185,7 @@
                         await this.loadPasswords();
                         this.render();
                     } else {
-                        const error = await res.json();
-                        this.showToast('Login failed: ' + error.error, 'error');
+                        this.showToast('Login failed: ' + (data.error || 'Unknown'), 'error');
                     }
                 } catch (e) {
                     this.showToast('Error: ' + e.message, 'error');
@@ -187,6 +201,9 @@
                 this.state.password = '';
                 localStorage.removeItem('token');
                 localStorage.removeItem('user');
+                this.state.twoFAStage = 'idle';
+                this.state.twoFATempToken = '';
+                this.state.twoFASecret = '';
                 this.render();
             }
 
@@ -516,6 +533,50 @@
                                             </div>`;
                                         document.body.appendChild(modal);
                                 }
+                                // 2FA 模态
+                                const existing2FA = document.getElementById('twofa-modal');
+                                if (existing2FA) existing2FA.remove();
+                                if (this.state.show2FAModal) {
+                                        const modal = document.createElement('div');
+                                        modal.id = 'twofa-modal';
+                                        modal.className = 'fixed inset-0 flex items-center justify-center z-50';
+                                        let bodyHTML = '';
+                                        if (this.state.twoFAStage === 'init') {
+                                                bodyHTML = `
+                                                    <p class='text-sm text-gray-300 mb-3'>使用身份验证 App 添加以下密钥或扫描二维码。</p>
+                                                    <div class='p-3 rounded bg-slate-700 font-mono break-all text-xs mb-3'>${this.state.twoFASecret}</div>
+                                                    <canvas id='qrCanvas' class='mx-auto mb-4'></canvas>
+                                                    <input type='text' placeholder='6位验证码' class='w-full bg-slate-700 text-white p-2 rounded mb-3 text-center tracking-widest' oninput='manager.state.twoFACode = this.value' />
+                                                    <div class='flex gap-2'>
+                                                        <button onclick='manager.activate2FA()' class='flex-1 bg-green-600 hover:bg-green-700 text-white font-bold py-2 rounded'>确认启用</button>
+                                                        <button onclick='manager.close2FAModal()' class='flex-1 bg-slate-600 hover:bg-slate-500 text-white font-bold py-2 rounded'>取消</button>
+                                                    </div>`;
+                                        } else if (this.state.twoFAStage === 'verify') {
+                                                bodyHTML = `
+                                                    <p class='text-sm text-gray-300 mb-4'>输入二次验证码完成登录。</p>
+                                                    <input type='text' placeholder='6位验证码' class='w-full bg-slate-700 text-white p-2 rounded mb-3 text-center tracking-widest' oninput='manager.state.twoFACode = this.value' />
+                                                    <div class='flex gap-2'>
+                                                        <button onclick='manager.verifyLogin2FA()' class='flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded'>验证</button>
+                                                        <button onclick='manager.close2FAModal()' class='flex-1 bg-slate-600 hover:bg-slate-500 text-white font-bold py-2 rounded'>取消</button>
+                                                    </div>`;
+                                        } else if (this.state.twoFAStage === 'disable') {
+                                                bodyHTML = `
+                                                    <p class='text-sm text-gray-300 mb-3'>输入当前验证码以关闭二次验证。</p>
+                                                    <input type='text' placeholder='6位验证码' class='w-full bg-slate-700 text-white p-2 rounded mb-3 text-center tracking-widest' oninput='manager.state.twoFACode = this.value' />
+                                                    <div class='flex gap-2'>
+                                                        <button onclick='manager.disable2FA()' class='flex-1 bg-red-600 hover:bg-red-700 text-white font-bold py-2 rounded'>关闭</button>
+                                                        <button onclick='manager.close2FAModal()' class='flex-1 bg-slate-600 hover:bg-slate-500 text-white font-bold py-2 rounded'>取消</button>
+                                                    </div>`;
+                                        }
+                                        modal.innerHTML = `
+                                            <div class='absolute inset-0 bg-black/60 backdrop-blur-sm'></div>
+                                            <div class='relative bg-[#0F1E2E] border border-[#F48120] rounded-xl p-6 w-[360px] shadow-2xl animate-slideIn'>
+                                                <h3 class='text-xl font-bold text-white mb-4'>二次验证 ${this.state.twoFAStage==='verify'?'登录':'设置'}</h3>
+                                                ${bodyHTML}
+                                            </div>`;
+                                        document.body.appendChild(modal);
+                                        if (this.state.twoFAStage === 'init') setTimeout(()=> this.drawQR(),50);
+                                }
             }
 
             renderLoginScreen() {
@@ -590,9 +651,10 @@
                                     <button onclick="manager.importPasswords()" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded transition" title="Import">
                                         📥 Import
                                     </button>
-                                    <button onclick="manager.logout()" class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded transition">
-                                        🚪 Logout
+                                    <button onclick="manager.open2FA()" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded transition" title="2FA">
+                                        ${this.state.twoFAEnabled ? '🔒 2FA 已启用' : '🔐 启用 2FA'}
                                     </button>
+                                    <button onclick="manager.logout()" class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded transition">🚪 Logout</button>
                                 </div>
                             </div>
 
@@ -768,6 +830,119 @@
             if (registerEmail) registerEmail.addEventListener('input', (e) => { manager.state.email = e.target.value; });
             if (registerPassword) registerPassword.addEventListener('input', (e) => { manager.state.password = e.target.value; });
         }, 100);
+
+        // 2FA 辅助函数
+        PasswordManager.prototype.open2FA = async function() {
+            try {
+                // 查询用户是否启用
+                const res = await fetch(`${API_BASE}/api/auth/login`, { method:'OPTIONS' }) // 占位可扩展
+            } catch {}
+            if (!this.state.twoFAEnabled) {
+                // 初始化阶段
+                this.state.twoFAStage = 'init';
+                this.showToast('生成二次验证密钥...', 'info');
+                try {
+                    const r = await fetch(`${API_BASE}/api/auth/2fa/init`, { method:'POST', headers:{'Authorization':`Bearer ${this.state.token}`}});
+                    const data = await r.json();
+                    if (r.ok) {
+                        this.state.twoFASecret = data.secret;
+                        this.state.twoFAOtpAuth = data.otpauth;
+                        this.state.show2FAModal = true;
+                        this.render();
+                    } else {
+                        this.showToast(data.error || 'Init failed','error');
+                    }
+                } catch(e){ this.showToast(e.message,'error'); }
+            } else {
+                this.state.twoFAStage = 'disable';
+                this.state.show2FAModal = true;
+                this.render();
+            }
+        }
+
+        PasswordManager.prototype.activate2FA = async function() {
+            if (!this.state.twoFACode) { this.showToast('请输入验证码','error'); return; }
+            try {
+                const r = await fetch(`${API_BASE}/api/auth/2fa/activate`, {
+                    method:'POST',
+                    headers:{'Authorization':`Bearer ${this.state.token}`, 'Content-Type':'application/json'},
+                    body: JSON.stringify({ code: this.state.twoFACode })
+                });
+                const data = await r.json();
+                if (r.ok) {
+                    this.state.twoFAEnabled = true;
+                    this.state.show2FAModal = false;
+                    this.state.twoFAStage = 'idle';
+                    this.state.twoFACode='';
+                    this.showToast('2FA 已启用','success');
+                    this.render();
+                } else this.showToast(data.error || '启用失败','error');
+            } catch(e){ this.showToast(e.message,'error'); }
+        }
+
+        PasswordManager.prototype.verifyLogin2FA = async function() {
+            if (!this.state.twoFACode) { this.showToast('请输入验证码','error'); return; }
+            try {
+                const r = await fetch(`${API_BASE}/api/auth/2fa/verify`, {
+                    method:'POST', headers:{'Content-Type':'application/json'},
+                    body: JSON.stringify({ tempToken: this.state.twoFATempToken, code: this.state.twoFACode })
+                });
+                const data = await r.json();
+                if (r.ok && data.token) {
+                    this.state.token = data.token;
+                    this.state.user = data.user;
+                    localStorage.setItem('token', data.token);
+                    localStorage.setItem('user', JSON.stringify(data.user));
+                    this.state.screen='app';
+                    this.state.show2FAModal=false;
+                    this.state.twoFAStage='idle';
+                    this.state.twoFATempToken='';
+                    this.state.twoFACode='';
+                    this.showToast('登录成功','success');
+                    await this.loadPasswords();
+                    this.render();
+                } else this.showToast(data.error || '验证失败','error');
+            } catch(e){ this.showToast(e.message,'error'); }
+        }
+
+        PasswordManager.prototype.disable2FA = async function() {
+            if (!this.state.twoFACode) { this.showToast('请输入验证码','error'); return; }
+            try {
+                const r = await fetch(`${API_BASE}/api/auth/2fa/disable`, {
+                    method:'POST', headers:{'Authorization':`Bearer ${this.state.token}`, 'Content-Type':'application/json'},
+                    body: JSON.stringify({ code: this.state.twoFACode })
+                });
+                const data = await r.json();
+                if (r.ok) {
+                    this.state.twoFAEnabled = false;
+                    this.state.show2FAModal=false;
+                    this.state.twoFAStage='idle';
+                    this.state.twoFACode='';
+                    this.showToast('2FA 已关闭','success');
+                    this.render();
+                } else this.showToast(data.error || '关闭失败','error');
+            } catch(e){ this.showToast(e.message,'error'); }
+        }
+
+        PasswordManager.prototype.close2FAModal = function(){
+            this.state.show2FAModal=false; this.state.twoFAStage='idle'; this.state.twoFACode=''; this.render();
+        }
+
+        // 简易二维码绘制 (otpauth URI -> QR, 使用最简单编码: 依赖第三方完整算法较复杂,此处占位提示)
+        PasswordManager.prototype.drawQR = function() {
+            const canvas = document.getElementById('qrCanvas');
+            if (!canvas || !this.state.twoFAOtpAuth) return;
+            // 占位: 用 fillText 显示 URI, 可后续替换为真正 QR 算法
+            canvas.width = 300; canvas.height = 300;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle='#0F1E2E'; ctx.fillRect(0,0,300,300);
+            ctx.fillStyle='#F48120'; ctx.font='12px Inter';
+            const text = this.state.twoFAOtpAuth;
+            const lines = [];
+            for (let i=0;i<text.length;i+=28) lines.push(text.slice(i,i+28));
+            lines.forEach((l,idx)=> ctx.fillText(l,10,20+idx*14));
+            ctx.strokeStyle='#F48120'; ctx.strokeRect(0,0,300,300);
+        }
     </script>
 </body>
 </html>

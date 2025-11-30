@@ -2,6 +2,28 @@ import { Router } from 'itty-router'
 
 const router = Router()
 
+// ============ Lazy DB Migration for 2FA Columns ============
+let migrationChecked = false
+async function ensureMigration(env) {
+  if (migrationChecked) return
+  try {
+    const info = await env.DB.prepare('PRAGMA table_info(users)').all()
+    const cols = info.results.map(c => c.name)
+    const needEnabled = !cols.includes('two_factor_enabled')
+    const needSecret = !cols.includes('two_factor_secret')
+    if (needEnabled) {
+      await env.DB.prepare('ALTER TABLE users ADD COLUMN two_factor_enabled INTEGER DEFAULT 0').run()
+    }
+    if (needSecret) {
+      await env.DB.prepare('ALTER TABLE users ADD COLUMN two_factor_secret TEXT').run()
+    }
+  } catch (e) {
+    // swallow errors to avoid breaking requests
+  } finally {
+    migrationChecked = true
+  }
+}
+
 // ============ Helper Functions ============
 
 // Base64 helpers
@@ -63,6 +85,14 @@ async function generateToken(userId) {
   return `${header}.${payload}.${signature}`
 }
 
+// Temporary JWT for pending 2FA (short lifetime 5m)
+async function generateTemp2FAToken(userId) {
+  const header = btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))
+  const payload = btoa(JSON.stringify({ userId, twofa: 'pending', exp: Math.floor(Date.now() / 1000) + 300 }))
+  const signature = btoa('demo-secret-key')
+  return `${header}.${payload}.${signature}`
+}
+
 // Verify JWT token
 function verifyToken(token) {
   try {
@@ -75,6 +105,15 @@ function verifyToken(token) {
   } catch {
     return null
   }
+}
+
+function decodeToken(token) {
+  try {
+    const [header, payload, signature] = token.split('.')
+    const decoded = JSON.parse(atob(payload))
+    if (decoded.exp < Math.floor(Date.now() / 1000)) return null
+    return decoded
+  } catch { return null }
 }
 
 // Extract user from request
@@ -105,6 +144,68 @@ function decryptPassword(encrypted, key) {
     decrypted[i] = encrypted_bytes[i] ^ keyData[i % keyData.length]
   }
   return new TextDecoder().decode(decrypted)
+}
+
+// ============ TOTP 2FA Helpers ============
+// Base32 decode (RFC 4648, no padding required)
+function base32Decode(str) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
+  let bits = ''
+  let out = []
+  const clean = str.replace(/=+$/,'').toUpperCase()
+  for (const c of clean) {
+    const val = alphabet.indexOf(c)
+    if (val < 0) continue
+    bits += val.toString(2).padStart(5,'0')
+    while (bits.length >= 8) {
+      out.push(parseInt(bits.slice(0,8),2))
+      bits = bits.slice(8)
+    }
+  }
+  return new Uint8Array(out)
+}
+
+// Generate random base32 secret
+function generateBase32Secret(length = 32) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
+  const bytes = crypto.getRandomValues(new Uint8Array(length))
+  let out = ''
+  for (const b of bytes) out += alphabet[b % alphabet.length]
+  return out
+}
+
+async function generateTOTP(secret, timeStep = 30, digits = 6) {
+  const keyBytes = base32Decode(secret)
+  const counter = Math.floor(Date.now() / 1000 / timeStep)
+  const buf = new ArrayBuffer(8)
+  const view = new DataView(buf)
+  view.setUint32(4, counter) // low 32 bits
+  // Import HMAC key
+  const cryptoKey = await crypto.subtle.importKey('raw', keyBytes, { name: 'HMAC', hash: 'SHA-1' }, false, ['sign'])
+  const hmac = new Uint8Array(await crypto.subtle.sign('HMAC', cryptoKey, buf))
+  const offset = hmac[hmac.length - 1] & 0x0f
+  const binary = ((hmac[offset] & 0x7f) << 24) | ((hmac[offset + 1] & 0xff) << 16) | ((hmac[offset + 2] & 0xff) << 8) | (hmac[offset + 3] & 0xff)
+  const otp = (binary % (10 ** digits)).toString().padStart(digits, '0')
+  return otp
+}
+
+async function verifyTOTP(secret, code) {
+  if (!/^[0-9]{6}$/.test(code)) return false
+  // Allow small drift ±1 window
+  for (let drift = -1; drift <= 1; drift++) {
+    const keyBytes = base32Decode(secret)
+    const counter = Math.floor(Date.now() / 1000 / 30) + drift
+    const buf = new ArrayBuffer(8)
+    const view = new DataView(buf)
+    view.setUint32(4, counter)
+    const cryptoKey = await crypto.subtle.importKey('raw', keyBytes, { name: 'HMAC', hash: 'SHA-1' }, false, ['sign'])
+    const hmac = new Uint8Array(await crypto.subtle.sign('HMAC', cryptoKey, buf))
+    const offset = hmac[hmac.length - 1] & 0x0f
+    const binary = ((hmac[offset] & 0x7f) << 24) | ((hmac[offset + 1] & 0xff) << 16) | ((hmac[offset + 2] & 0xff) << 8) | (hmac[offset + 3] & 0xff)
+    const otp = (binary % (10 ** 6)).toString().padStart(6, '0')
+    if (otp === code) return true
+  }
+  return false
 }
 
 // ============ CORS Middleware ============
@@ -216,6 +317,7 @@ router.post('/api/auth/register', async (request, env) => {
 // Login
 router.post('/api/auth/login', async (request, env) => {
   try {
+    await ensureMigration(env)
     const { email, password } = await request.json()
     if (!email || !password) {
       return addCors(new Response(JSON.stringify({ error: 'email and password required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request)
@@ -227,7 +329,7 @@ router.post('/api/auth/login', async (request, env) => {
     if (!emailRegex.test(normalizedEmail)) {
       return addCors(new Response(JSON.stringify({ error: 'Invalid credentials' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request)
     }
-    const user = await env.DB.prepare('SELECT id, password_hash FROM users WHERE email = ?').bind(normalizedEmail).first()
+    const user = await env.DB.prepare('SELECT id, password_hash, two_factor_enabled FROM users WHERE email = ?').bind(normalizedEmail).first()
     if (!user) {
       return addCors(new Response(JSON.stringify({ error: 'Invalid credentials' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request)
     }
@@ -237,9 +339,88 @@ router.post('/api/auth/login', async (request, env) => {
       return addCors(new Response(JSON.stringify({ error: 'Invalid credentials' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request)
     }
 
+    if (user.two_factor_enabled) {
+      // Return temp token requiring 2FA
+      const temp = await generateTemp2FAToken(user.id)
+      return addCors(new Response(JSON.stringify({ require2FA: true, tempToken: temp }), { status: 200, headers: { 'Content-Type': 'application/json' } }), request)
+    }
     const token = await generateToken(user.id)
-
     return addCors(new Response(JSON.stringify({ user: { id: user.id, email: normalizedEmail }, token }), { status: 200, headers: { 'Content-Type': 'application/json' } }), request)
+  } catch (e) {
+    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }), request)
+  }
+})
+
+// init 2FA: generate secret (not enabled until activation)
+router.post('/api/auth/2fa/init', async (request, env) => {
+  try {
+    await ensureMigration(env)
+    const userId = getUserFromRequest(request)
+    if (!userId) return addCors(new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request)
+    const user = await env.DB.prepare('SELECT two_factor_enabled, two_factor_secret, email FROM users WHERE id = ?').bind(userId).first()
+    if (user.two_factor_enabled) return addCors(new Response(JSON.stringify({ error: 'Already enabled' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request)
+    const secret = generateBase32Secret(32)
+    await env.DB.prepare('UPDATE users SET two_factor_secret = ? WHERE id = ?').bind(secret, userId).run()
+    const otpauth = `otpauth://totp/PassFortress:${encodeURIComponent(user.email)}?secret=${secret}&issuer=PassFortress`
+    return addCors(new Response(JSON.stringify({ secret, otpauth }), { status: 200, headers: { 'Content-Type': 'application/json' } }), request)
+  } catch (e) {
+    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }), request)
+  }
+})
+
+// activate 2FA (verify code then enable)
+router.post('/api/auth/2fa/activate', async (request, env) => {
+  try {
+    await ensureMigration(env)
+    const userId = getUserFromRequest(request)
+    if (!userId) return addCors(new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request)
+    const { code } = await request.json()
+    if (!code) return addCors(new Response(JSON.stringify({ error: 'code required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request)
+    const user = await env.DB.prepare('SELECT two_factor_secret, two_factor_enabled FROM users WHERE id = ?').bind(userId).first()
+    if (!user.two_factor_secret) return addCors(new Response(JSON.stringify({ error: 'init required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request)
+    if (user.two_factor_enabled) return addCors(new Response(JSON.stringify({ error: 'Already enabled' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request)
+    const ok = await verifyTOTP(user.two_factor_secret, code)
+    if (!ok) return addCors(new Response(JSON.stringify({ error: 'Invalid code' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request)
+    await env.DB.prepare('UPDATE users SET two_factor_enabled = 1 WHERE id = ?').bind(userId).run()
+    return addCors(new Response(JSON.stringify({ success: true }), { status: 200, headers: { 'Content-Type': 'application/json' } }), request)
+  } catch (e) {
+    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }), request)
+  }
+})
+
+// verify 2FA after login (exchange tempToken + code for full token)
+router.post('/api/auth/2fa/verify', async (request, env) => {
+  try {
+    await ensureMigration(env)
+    const { tempToken, code } = await request.json()
+    if (!tempToken || !code) return addCors(new Response(JSON.stringify({ error: 'tempToken and code required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request)
+    const decoded = decodeToken(tempToken)
+    if (!decoded || decoded.twofa !== 'pending') return addCors(new Response(JSON.stringify({ error: 'Invalid token' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request)
+    const user = await env.DB.prepare('SELECT id, email, two_factor_secret, two_factor_enabled FROM users WHERE id = ?').bind(decoded.userId).first()
+    if (!user || !user.two_factor_enabled || !user.two_factor_secret) return addCors(new Response(JSON.stringify({ error: '2FA not enabled' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request)
+    const ok = await verifyTOTP(user.two_factor_secret, code)
+    if (!ok) return addCors(new Response(JSON.stringify({ error: 'Invalid code' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request)
+    const fullToken = await generateToken(user.id)
+    return addCors(new Response(JSON.stringify({ user: { id: user.id, email: user.email }, token: fullToken }), { status: 200, headers: { 'Content-Type': 'application/json' } }), request)
+  } catch (e) {
+    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }), request)
+  }
+})
+
+// disable 2FA (requires current code)
+router.post('/api/auth/2fa/disable', async (request, env) => {
+  try {
+    await ensureMigration(env)
+    const userId = getUserFromRequest(request)
+    if (!userId) return addCors(new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request)
+    const { code } = await request.json()
+    if (!code) return addCors(new Response(JSON.stringify({ error: 'code required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request)
+    const user = await env.DB.prepare('SELECT two_factor_secret, two_factor_enabled FROM users WHERE id = ?').bind(userId).first()
+    if (!user.two_factor_enabled || !user.two_factor_secret) return addCors(new Response(JSON.stringify({ error: 'Not enabled' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request)
+    const ok = await verifyTOTP(user.two_factor_secret, code)
+    if (!ok) return addCors(new Response(JSON.stringify({ error: 'Invalid code' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request)
+    await env.DB.prepare('UPDATE users SET two_factor_enabled = 0, two_factor_secret = NULL WHERE id = ?').bind(userId).run()
+    return addCors(new Response(JSON.stringify({ success: true }), { status: 200, headers: { 'Content-Type': 'application/json' } }), request)
   } catch (e) {
     return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }), request)
   }
