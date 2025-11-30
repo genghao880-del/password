@@ -151,6 +151,8 @@
             }
 
             async login() {
+                // 清理上一次的提示，避免错误消息在成功登录后残留
+                this.state.toastMessage = '';
                 if (!this.state.email || !this.state.password) {
                     this.showToast('Please fill in all fields', 'error');
                     return;
@@ -182,6 +184,8 @@
                         this.state.screen = 'app';
                         this.state.email = '';
                         this.state.password = '';
+                        // 成功后确保清除任何错误提示
+                        this.state.toastMessage = '';
                         await this.loadPasswords();
                         this.render();
                     } else {
@@ -657,153 +661,125 @@
                                     <button onclick="manager.logout()" class="bg-red-600 hover:bg-red-700 text-white font-semibold py-2.5 px-4 rounded-lg transition shadow-lg" title="退出登录">🚺 退出</button>
                                 </div>
                             </div>
-
-                            <!-- Generator Section -->
-                            <div class="bg-slate-800 border border-purple-500 rounded-lg p-6 mb-6 shadow-2xl">
-                                <div class="flex justify-between items-center mb-4">
-                                    <h2 class="text-2xl font-bold text-white">🎲 生成强密码</h2>
-                                    <button onclick="manager.state.showSettings = !manager.state.showSettings; manager.render()" class="text-purple-300 hover:text-purple-100">
-                                        ⚙️ 设置
-                                    </button>
-                                </div>
-                                
-                                ${this.state.showSettings ? `
-                                    <div class="bg-slate-700 p-4 rounded-lg mb-4 space-y-3">
-                                        <div class="flex items-center justify-between">
-                                            <label class="text-white">长度: ${this.state.passwordLength}</label>
-                                            <input type="range" min="8" max="32" value="${this.state.passwordLength}" 
-                                                onchange="manager.state.passwordLength = parseInt(this.value); manager.render()" 
-                                                class="w-48" />
+                            <div class="flex flex-col lg:flex-row gap-6">
+                                <!-- Left: Search & Passwords List -->
+                                <div class="flex-1 space-y-6">
+                                    <div class="bg-slate-800 border border-purple-500 rounded-lg p-6 shadow-2xl h-full">
+                                        <div class="flex justify-between items-center mb-4">
+                                            <h2 class="text-2xl font-bold text-white">🔑 已保存密码 (${this.state.passwords.length})</h2>
                                         </div>
-                                        <div class="grid grid-cols-2 gap-2">
-                                            <label class="flex items-center text-white cursor-pointer">
-                                                <input type="checkbox" ${this.state.includeUppercase ? 'checked' : ''} 
-                                                    onchange="manager.state.includeUppercase = this.checked; manager.render()" 
-                                                    class="mr-2" /> 大写字母 (A-Z)
-                                            </label>
-                                            <label class="flex items-center text-white cursor-pointer">
-                                                <input type="checkbox" ${this.state.includeLowercase ? 'checked' : ''} 
-                                                    onchange="manager.state.includeLowercase = this.checked; manager.render()" 
-                                                    class="mr-2" /> 小写字母 (a-z)
-                                            </label>
-                                            <label class="flex items-center text-white cursor-pointer">
-                                                <input type="checkbox" ${this.state.includeNumbers ? 'checked' : ''} 
-                                                    onchange="manager.state.includeNumbers = this.checked; manager.render()" 
-                                                    class="mr-2" /> 数字 (0-9)
-                                            </label>
-                                            <label class="flex items-center text-white cursor-pointer">
-                                                <input type="checkbox" ${this.state.includeSymbols ? 'checked' : ''} 
-                                                    onchange="manager.state.includeSymbols = this.checked; manager.render()" 
-                                                    class="mr-2" /> 符号 (!@#...)
-                                            </label>
+                                        <input type="text" placeholder="🔍 搜索密码..." value="${this.state.searchQuery}" 
+                                            oninput="manager.searchPasswords(this.value)" 
+                                            class="w-full bg-slate-700 text-white p-3 rounded-lg border border-purple-500 focus:outline-none focus:border-pink-500 mb-4" />
+                                        <div class="space-y-3 max-h-[560px] overflow-y-auto pr-1">
+                                            ${this.state.passwords.length === 0 ? 
+                                                '<p class="text-gray-400 text-center py-8">暂无密码。</p>' : 
+                                                sortedPasswords.map(p => {
+                                                    const age = this.getPasswordAge(p.created_at);
+                                                    const isFavorite = this.state.favorites.includes(p.id);
+                                                    return `
+                                                    <div class="password-item bg-slate-700 p-4 rounded-lg border ${isFavorite ? 'border-yellow-500' : 'border-purple-500'} transition-all">
+                                                        <div class="flex justify-between items-start mb-2">
+                                                            <div class="flex-1">
+                                                                <div class="flex items-center gap-2">
+                                                                    <button onclick="manager.toggleFavorite(${p.id})" class="text-2xl" title="${isFavorite ? '移出收藏' : '加入收藏'}">
+                                                                        ${isFavorite ? '⭐' : '☆'}
+                                                                    </button>
+                                                                    <p class="font-bold text-purple-300 text-lg truncate max-w-[180px]" title="${p.website}">${p.website}</p>
+                                                                </div>
+                                                                <p class="text-sm text-gray-400 font-mono ml-8 break-all">${this.state.visiblePasswords[p.id] ? p.password : '••••••••••••'}</p>
+                                                                <div class="flex items-center gap-3 mt-2 ml-8">
+                                                                    <p class="text-xs text-gray-500">📅 ${new Date(p.created_at).toLocaleDateString()}</p>
+                                                                    <p class="text-xs" style="color: ${age.color === 'red' ? '#f87171' : age.color === 'yellow' ? '#facc15' : '#4ade80'}">${age.warning ? '⚠️ ' : ''}${age.text}</p>
+                                                                </div>
+                                                            </div>
+                                                            <div class="flex gap-1">
+                                                                <button onclick="manager.togglePasswordVisibility(${p.id})" class="bg-purple-600 hover:bg-purple-700 text-white px-3 py-2 rounded-lg transition text-sm" title="${this.state.visiblePasswords[p.id] ? '隐藏' : '显示'}">
+                                                                    ${this.state.visiblePasswords[p.id] ? '👁️' : '🔒'}
+                                                                </button>
+                                                                <button onclick="manager.copyToClipboard('${p.password}')" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-lg transition text-sm" title="复制">
+                                                                    📋
+                                                                </button>
+                                                                <button onclick="manager.startEditPassword(${p.id}, '${p.website}', '${p.password}')" class="bg-cyan-600 hover:bg-cyan-700 text-white px-3 py-2 rounded-lg transition text-sm" title="编辑">
+                                                                    ✏️
+                                                                </button>
+                                                                <button onclick="manager.deletePassword(${p.id})" class="bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded-lg transition text-sm" title="删除">
+                                                                    🗑️
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                `}).join('')
+                                            }
                                         </div>
                                     </div>
-                                ` : ''}
-                                
-                                <button onclick="manager.generatePassword()" class="w-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white font-bold py-3 px-6 rounded-lg transition mb-3">
-                                    🎲 生成密码
-                                </button>
-                                
-                                ${this.state.generatedPassword ? `
-                                    <div class="space-y-2">
-                                        ${strength ? `
-                                            <div class="flex items-center gap-2">
-                                                <div class="flex-1 bg-slate-700 rounded-full h-2">
-                                                    <div class="h-2 rounded-full transition-all" style="width: ${strength.level === 'weak' ? '33%' : strength.level === 'medium' ? '66%' : '100%'}; background-color: ${strength.color === 'red' ? '#ef4444' : strength.color === 'yellow' ? '#eab308' : '#22c55e'}"></div>
+                                </div>
+                                <!-- Right: Generator + Save/Edit -->
+                                <div class="w-full lg:w-[420px] space-y-6">
+                                    <div class="bg-slate-800 border border-purple-500 rounded-lg p-6 shadow-2xl">
+                                        <div class="flex justify-between items-center mb-4">
+                                            <h2 class="text-2xl font-bold text-white">🎲 生成强密码</h2>
+                                            <button onclick="manager.state.showSettings = !manager.state.showSettings; manager.render()" class="text-purple-300 hover:text-purple-100">
+                                                ⚙️ 设置
+                                            </button>
+                                        </div>
+                                        ${this.state.showSettings ? `
+                                            <div class="bg-slate-700 p-4 rounded-lg mb-4 space-y-3">
+                                                <div class="flex items-center justify-between">
+                                                    <label class="text-white">长度: ${this.state.passwordLength}</label>
+                                                    <input type="range" min="8" max="32" value="${this.state.passwordLength}" onchange="manager.state.passwordLength = parseInt(this.value); manager.render()" class="w-48" />
                                                 </div>
-                                                <span class="font-bold text-sm" style="color: ${strength.color === 'red' ? '#f87171' : strength.color === 'yellow' ? '#facc15' : '#4ade80'}">${strength.text}</span>
+                                                <div class="grid grid-cols-2 gap-2">
+                                                    <label class="flex items-center text-white cursor-pointer">
+                                                        <input type="checkbox" ${this.state.includeUppercase ? 'checked' : ''} onchange="manager.state.includeUppercase = this.checked; manager.render()" class="mr-2" /> 大写 (A-Z)
+                                                    </label>
+                                                    <label class="flex items-center text-white cursor-pointer">
+                                                        <input type="checkbox" ${this.state.includeLowercase ? 'checked' : ''} onchange="manager.state.includeLowercase = this.checked; manager.render()" class="mr-2" /> 小写 (a-z)
+                                                    </label>
+                                                    <label class="flex items-center text-white cursor-pointer">
+                                                        <input type="checkbox" ${this.state.includeNumbers ? 'checked' : ''} onchange="manager.state.includeNumbers = this.checked; manager.render()" class="mr-2" /> 数字 (0-9)
+                                                    </label>
+                                                    <label class="flex items-center text-white cursor-pointer">
+                                                        <input type="checkbox" ${this.state.includeSymbols ? 'checked' : ''} onchange="manager.state.includeSymbols = this.checked; manager.render()" class="mr-2" /> 符号 (!@#)
+                                                    </label>
+                                                </div>
                                             </div>
                                         ` : ''}
-                                        <div class="flex gap-2">
-                                            <input type="${this.state.showGeneratedPassword ? 'text' : 'password'}" value="${this.state.generatedPassword}" readonly class="flex-1 bg-slate-700 text-white p-3 rounded-lg border border-purple-500 font-mono" />
-                                            <button onclick="manager.toggleGeneratedPasswordVisibility()" class="bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-4 rounded-lg transition" title="${this.state.showGeneratedPassword ? 'Hide' : 'Show'}">
-                                                ${this.state.showGeneratedPassword ? '👁️' : '🔒'}
-                                            </button>
-                                            <button onclick="manager.copyToClipboard('${this.state.generatedPassword}')" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg transition">
-                                                📋
-                                            </button>
-                                            <button onclick="manager.useGeneratedPassword()" class="bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded-lg transition">
-                                                ✅
-                                            </button>
-                                        </div>
-                                    </div>
-                                ` : ''}
-                            </div>
-
-                            <!-- Save/Edit Password Section -->
-                            <div class="bg-slate-800 border border-purple-500 rounded-lg p-6 mb-6 shadow-2xl">
-                                <h2 class="text-2xl font-bold text-white mb-4">${this.state.editingPasswordId ? '✏️ 编辑密码' : '💾 保存密码'}</h2>
-                                <div class="space-y-3">
-                                    <input type="text" placeholder="网站 (例如：gmail.com)" value="${this.state.newWebsite}" class="w-full bg-slate-700 text-white p-3 rounded-lg border border-purple-500 focus:outline-none focus:border-pink-500" id="website" />
-                                    <input type="password" placeholder="密码" value="${this.state.newPassword}" class="w-full bg-slate-700 text-white p-3 rounded-lg border border-purple-500 focus:outline-none focus:border-pink-500 font-mono" id="password" />
-                                    ${this.state.editingPasswordId ? `
-                                        <div class="flex gap-2">
-                                            <button onclick="manager.updatePassword()" class="flex-1 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 text-white font-bold py-3 px-6 rounded-lg transition">
-                                                ✏️ 更新密码
-                                            </button>
-                                            <button onclick="manager.cancelEdit()" class="bg-slate-600 hover:bg-slate-500 text-white font-bold py-3 px-6 rounded-lg transition">
-                                                ❌ 取消
-                                            </button>
-                                        </div>
-                                    ` : `
-                                        <button onclick="manager.savePassword()" class="w-full bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white font-bold py-3 px-6 rounded-lg transition">
-                                            💾 保存密码
-                                        </button>
-                                    `}
-                                </div>
-                            </div>
-
-                            <!-- Search & Passwords List -->
-                            <div class="bg-slate-800 border border-purple-500 rounded-lg p-6 shadow-2xl">
-                                <div class="flex justify-between items-center mb-4">
-                                    <h2 class="text-2xl font-bold text-white">🔑 已保存密码 (${this.state.passwords.length})</h2>
-                                </div>
-                                
-                                <!-- Search Bar -->
-                                <input type="text" placeholder="🔍 搜索密码..." value="${this.state.searchQuery}" 
-                                    oninput="manager.searchPasswords(this.value)" 
-                                    class="w-full bg-slate-700 text-white p-3 rounded-lg border border-purple-500 focus:outline-none focus:border-pink-500 mb-4" />
-                                
-                                <div class="space-y-3 max-h-96 overflow-y-auto">
-                                    ${this.state.passwords.length === 0 ? 
-                                        '<p class="text-gray-400 text-center py-8">暂无密码。</p>' : 
-                                        sortedPasswords.map(p => {
-                                            const age = this.getPasswordAge(p.created_at);
-                                            const isFavorite = this.state.favorites.includes(p.id);
-                                            return `
-                                            <div class="password-item bg-slate-700 p-4 rounded-lg border ${isFavorite ? 'border-yellow-500' : 'border-purple-500'} transition-all">
-                                                <div class="flex justify-between items-start mb-2">
-                                                    <div class="flex-1">
-                                                        <div class="flex items-center gap-2">
-                                                            <button onclick="manager.toggleFavorite(${p.id})" class="text-2xl" title="${isFavorite ? 'Remove from favorites' : 'Add to favorites'}">
-                                                                ${isFavorite ? '⭐' : '☆'}
-                                                            </button>
-                                                            <p class="font-bold text-purple-300 text-lg">${p.website}</p>
+                                        <button onclick="manager.generatePassword()" class="w-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white font-bold py-3 px-6 rounded-lg transition mb-3">🎲 生成密码</button>
+                                        ${this.state.generatedPassword ? `
+                                            <div class="space-y-2">
+                                                ${strength ? `
+                                                    <div class="flex items-center gap-2">
+                                                        <div class="flex-1 bg-slate-700 rounded-full h-2">
+                                                            <div class="h-2 rounded-full transition-all" style="width: ${strength.level === 'weak' ? '33%' : strength.level === 'medium' ? '66%' : '100%'}; background-color: ${strength.color === 'red' ? '#ef4444' : strength.color === 'yellow' ? '#eab308' : '#22c55e'}"></div>
                                                         </div>
-                                                        <p class="text-sm text-gray-400 font-mono ml-8">${this.state.visiblePasswords[p.id] ? p.password : '••••••••••••'}</p>
-                                                        <div class="flex items-center gap-3 mt-2 ml-8">
-                                                            <p class="text-xs text-gray-500">📅 ${new Date(p.created_at).toLocaleDateString()}</p>
-                                                            <p class="text-xs" style="color: ${age.color === 'red' ? '#f87171' : age.color === 'yellow' ? '#facc15' : '#4ade80'}">${age.warning ? '⚠️ ' : ''}${age.text}</p>
-                                                        </div>
+                                                        <span class="font-bold text-sm" style="color: ${strength.color === 'red' ? '#f87171' : strength.color === 'yellow' ? '#facc15' : '#4ade80'}">${strength.text}</span>
                                                     </div>
-                                                    <div class="flex gap-1">
-                                                        <button onclick="manager.togglePasswordVisibility(${p.id})" class="bg-purple-600 hover:bg-purple-700 text-white px-3 py-2 rounded transition text-sm" title="${this.state.visiblePasswords[p.id] ? 'Hide' : 'Show'}">
-                                                            ${this.state.visiblePasswords[p.id] ? '👁️' : '🔒'}
-                                                        </button>
-                                                        <button onclick="manager.copyToClipboard('${p.password}')" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded transition text-sm" title="Copy">
-                                                            📋
-                                                        </button>
-                                                        <button onclick="manager.startEditPassword(${p.id}, '${p.website}', '${p.password}')" class="bg-cyan-600 hover:bg-cyan-700 text-white px-3 py-2 rounded transition text-sm" title="Edit">
-                                                            ✏️
-                                                        </button>
-                                                        <button onclick="manager.deletePassword(${p.id})" class="bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded transition text-sm" title="Delete">
-                                                            🗑️
-                                                        </button>
-                                                    </div>
+                                                ` : ''}
+                                                <div class="flex gap-2">
+                                                    <input type="${this.state.showGeneratedPassword ? 'text' : 'password'}" value="${this.state.generatedPassword}" readonly class="flex-1 bg-slate-700 text-white p-3 rounded-lg border border-purple-500 font-mono" />
+                                                    <button onclick="manager.toggleGeneratedPasswordVisibility()" class="bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-4 rounded-lg transition" title="${this.state.showGeneratedPassword ? '隐藏' : '显示'}">${this.state.showGeneratedPassword ? '👁️' : '🔒'}</button>
+                                                    <button onclick="manager.copyToClipboard('${this.state.generatedPassword}')" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg transition" title="复制">📋</button>
+                                                    <button onclick="manager.useGeneratedPassword()" class="bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded-lg transition" title="使用">✅</button>
                                                 </div>
                                             </div>
-                                        `}).join('')
-                                    }
+                                        ` : ''}
+                                    </div>
+                                    <div class="bg-slate-800 border border-purple-500 rounded-lg p-6 shadow-2xl">
+                                        <h2 class="text-2xl font-bold text-white mb-4">${this.state.editingPasswordId ? '✏️ 编辑密码' : '💾 保存密码'}</h2>
+                                        <div class="space-y-3">
+                                            <input type="text" placeholder="网站 (例如：gmail.com)" value="${this.state.newWebsite}" class="w-full bg-slate-700 text-white p-3 rounded-lg border border-purple-500 focus:outline-none focus:border-pink-500" id="website" />
+                                            <input type="password" placeholder="密码" value="${this.state.newPassword}" class="w-full bg-slate-700 text-white p-3 rounded-lg border border-purple-500 focus:outline-none focus:border-pink-500 font-mono" id="password" />
+                                            ${this.state.editingPasswordId ? `
+                                                <div class="flex gap-2">
+                                                    <button onclick="manager.updatePassword()" class="flex-1 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 text-white font-bold py-3 px-6 rounded-lg transition">✏️ 更新密码</button>
+                                                    <button onclick="manager.cancelEdit()" class="bg-slate-600 hover:bg-slate-500 text-white font-bold py-3 px-6 rounded-lg transition">❌ 取消</button>
+                                                </div>
+                                            ` : `
+                                                <button onclick="manager.savePassword()" class="w-full bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white font-bold py-3 px-6 rounded-lg transition">💾 保存密码</button>
+                                            `}
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         </div>
