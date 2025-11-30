@@ -8,6 +8,7 @@
     <meta http-equiv="Expires" content="0" />
     <title>PassFortress - Secure Password Manager</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
         html {
@@ -543,9 +544,10 @@
                                         let bodyHTML = '';
                                         if (this.state.twoFAStage === 'init') {
                                                 bodyHTML = `
-                                                    <p class='text-sm text-gray-300 mb-3'>使用身份验证 App 添加以下密钥或扫描二维码。</p>
-                                                    <div class='p-3 rounded bg-slate-700 font-mono break-all text-xs mb-3'>${this.state.twoFASecret}</div>
-                                                    <canvas id='qrCanvas' class='mx-auto mb-4'></canvas>
+                                                    <p class='text-sm text-gray-300 mb-3'>使用 <strong class='text-[#F48120]'>Google Authenticator</strong> 或其他身份验证 App 扫描二维码：</p>
+                                                    <div id='qrcode' class='flex justify-center mb-3'></div>
+                                                    <p class='text-xs text-gray-400 text-center mb-2'>或手动输入密钥：</p>
+                                                    <div class='p-3 rounded bg-slate-700 font-mono break-all text-xs mb-3 select-all'>${this.state.twoFASecret}</div>
                                                     <input type='text' placeholder='6位验证码' class='w-full bg-slate-700 text-white p-2 rounded mb-3 text-center tracking-widest' oninput='manager.state.twoFACode = this.value' />
                                                     <div class='flex gap-2'>
                                                         <button onclick='manager.activate2FA()' class='flex-1 bg-green-600 hover:bg-green-700 text-white font-bold py-2 rounded'>确认启用</button>
@@ -575,7 +577,7 @@
                                                 ${bodyHTML}
                                             </div>`;
                                         document.body.appendChild(modal);
-                                        if (this.state.twoFAStage === 'init') setTimeout(()=> this.drawQR(),50);
+                                        if (this.state.twoFAStage === 'init') setTimeout(()=> this.generateQR(),50);
                                 }
             }
 
@@ -928,20 +930,26 @@
             this.state.show2FAModal=false; this.state.twoFAStage='idle'; this.state.twoFACode=''; this.render();
         }
 
-        // 简易二维码绘制 (otpauth URI -> QR, 使用最简单编码: 依赖第三方完整算法较复杂,此处占位提示)
-        PasswordManager.prototype.drawQR = function() {
-            const canvas = document.getElementById('qrCanvas');
-            if (!canvas || !this.state.twoFAOtpAuth) return;
-            // 占位: 用 fillText 显示 URI, 可后续替换为真正 QR 算法
-            canvas.width = 300; canvas.height = 300;
-            const ctx = canvas.getContext('2d');
-            ctx.fillStyle='#0F1E2E'; ctx.fillRect(0,0,300,300);
-            ctx.fillStyle='#F48120'; ctx.font='12px Inter';
-            const text = this.state.twoFAOtpAuth;
-            const lines = [];
-            for (let i=0;i<text.length;i+=28) lines.push(text.slice(i,i+28));
-            lines.forEach((l,idx)=> ctx.fillText(l,10,20+idx*14));
-            ctx.strokeStyle='#F48120'; ctx.strokeRect(0,0,300,300);
+        // 使用 QRCode.js 生成标准二维码 (兼容 Google Authenticator)
+        PasswordManager.prototype.generateQR = function() {
+            const container = document.getElementById('qrcode');
+            if (!container || !this.state.twoFAOtpAuth) return;
+            // 清空容器
+            container.innerHTML = '';
+            try {
+                // 生成二维码
+                new QRCode(container, {
+                    text: this.state.twoFAOtpAuth,
+                    width: 200,
+                    height: 200,
+                    colorDark: '#0F1E2E',
+                    colorLight: '#ffffff',
+                    correctLevel: QRCode.CorrectLevel.M
+                });
+            } catch(e) {
+                // 降级显示 URI
+                container.innerHTML = `<div class='text-xs text-gray-400 p-2 bg-slate-700 rounded break-all'>${this.state.twoFAOtpAuth}</div>`;
+            }
         }
     </script>
 </body>
