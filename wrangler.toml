@@ -8,6 +8,10 @@ main = "worker-entry-v2.js"
 [assets]
 directory = "public"
 
+# Environment variables (optional)
+[vars]
+CUSTOM_DOMAIN = "661985.xyz"
+
 # D1 Database
 [[d1_databases]]
 binding = "DB"

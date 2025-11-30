@@ -236,15 +236,27 @@ async function verifyTOTP(secret, code) {
 }
 
 // ============ CORS Middleware ============
-// Allowed origins (可根据需要扩展)
-const ALLOWED_ORIGINS = [
-  'https://661985.xyz'
-]
+// 从环境变量或请求自动检测允许的�?
+function getAllowedOrigins(env, request) {
+  const origins = []
+  // 添加环境变量配置的域�?
+  if (env.CUSTOM_DOMAIN) {
+    origins.push(`https://${env.CUSTOM_DOMAIN}`)
+  }
+  // 添加当前请求的域名（workers.dev或自定义域名�?
+  const requestUrl = new URL(request.url)
+  const currentOrigin = `${requestUrl.protocol}//${requestUrl.hostname}`
+  if (!origins.includes(currentOrigin)) {
+    origins.push(currentOrigin)
+  }
+  return origins
+}
 
 // OPTIONS 预检
-router.options('*', (request) => {
+router.options('*', (request, env) => {
+  const allowedOrigins = getAllowedOrigins(env, request)
   const origin = request.headers.get('Origin')
-  const allowOrigin = origin && ALLOWED_ORIGINS.includes(origin) ? origin : 'https://661985.xyz'
+  const allowOrigin = origin && allowedOrigins.includes(origin) ? origin : allowedOrigins[0]
   return new Response(null, {
     status: 204,
     headers: {
@@ -256,10 +268,11 @@ router.options('*', (request) => {
   })
 })
 
-// 安全响应头 + CORS + RateLimit 头
-function applySecurityHeaders(response, request, rateInfo) {
+// 安全响应�?+ CORS + RateLimit �?
+function applySecurityHeaders(response, request, rateInfo, env) {
+  const allowedOrigins = env ? getAllowedOrigins(env, request) : []
   const origin = request.headers.get('Origin')
-  const allowOrigin = origin && ALLOWED_ORIGINS.includes(origin) ? origin : 'https://661985.xyz'
+  const allowOrigin = origin && allowedOrigins.includes(origin) ? origin : (allowedOrigins[0] || request.headers.get('host'))
   const h = response.headers
   h.set('Access-Control-Allow-Origin', allowOrigin)
   h.set('Vary', 'Origin')
@@ -278,8 +291,8 @@ function applySecurityHeaders(response, request, rateInfo) {
 }
 
 // 包装响应
-function addCors(response, request, rateInfo) {
-  return applySecurityHeaders(response, request, rateInfo)
+function addCors(response, request, rateInfo, env) {
+  return applySecurityHeaders(response, request, rateInfo, env)
 }
 
 // ============ Rate Limiting ============
@@ -306,24 +319,24 @@ router.post('/api/auth/register', async (request, env) => {
   try {
     const { email, password } = await request.json()
     if (!email || !password) {
-      return addCors(new Response(JSON.stringify({ error: 'email and password required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request)
+      return addCors(new Response(JSON.stringify({ error: 'email and password required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request, null, env)
     }
 
     // Basic server-side validation (avoid user enumeration / weak password acceptance)
     const emailRegex = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
     if (!emailRegex.test(email)) {
-      return addCors(new Response(JSON.stringify({ error: 'Invalid registration data' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request)
+      return addCors(new Response(JSON.stringify({ error: 'Invalid registration data' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request, null, env)
     }
     // Password policy: >=8 chars, include 3 of (lower, upper, number, symbol)
     const categories = [/[a-z]/, /[A-Z]/, /[0-9]/, /[^a-zA-Z0-9]/].reduce((acc, r) => acc + (r.test(password) ? 1 : 0), 0)
     if (password.length < 8 || categories < 3) {
-      return addCors(new Response(JSON.stringify({ error: 'Invalid registration data' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request)
+      return addCors(new Response(JSON.stringify({ error: 'Invalid registration data' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request, null, env)
     }
 
     // Check if user exists
     const existing = await env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(email).first()
     if (existing) {
-      return addCors(new Response(JSON.stringify({ error: 'Registration failed' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request)
+      return addCors(new Response(JSON.stringify({ error: 'Registration failed' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request, null, env)
     }
 
     // Hash password (PBKDF2)
@@ -335,9 +348,9 @@ router.post('/api/auth/register', async (request, env) => {
 
     const token = await generateToken(result.id)
 
-    return addCors(new Response(JSON.stringify({ user: result, token }), { status: 201, headers: { 'Content-Type': 'application/json' } }), request)
+    return addCors(new Response(JSON.stringify({ user: result, token }), { status: 201, headers: { 'Content-Type': 'application/json' } }), request, null, env)
   } catch (e) {
-    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }), request)
+    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }), request, null, env)
   }
 })
 
@@ -347,34 +360,34 @@ router.post('/api/auth/login', async (request, env) => {
     await ensureMigration(env)
     const { email, password } = await request.json()
     if (!email || !password) {
-      return addCors(new Response(JSON.stringify({ error: 'email and password required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request)
+      return addCors(new Response(JSON.stringify({ error: 'email and password required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request, null, env)
     }
 
     // Normalize email (defensive)
     const normalizedEmail = email.trim().toLowerCase()
     const emailRegex = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
     if (!emailRegex.test(normalizedEmail)) {
-      return addCors(new Response(JSON.stringify({ error: 'Invalid credentials' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request)
+      return addCors(new Response(JSON.stringify({ error: 'Invalid credentials' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request, null, env)
     }
     const user = await env.DB.prepare('SELECT id, password_hash, two_factor_enabled FROM users WHERE email = ?').bind(normalizedEmail).first()
     if (!user) {
-      return addCors(new Response(JSON.stringify({ error: 'Invalid credentials' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request)
+      return addCors(new Response(JSON.stringify({ error: 'Invalid credentials' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request, null, env)
     }
 
     const isValid = await verifyPassword(password, user.password_hash)
     if (!isValid) {
-      return addCors(new Response(JSON.stringify({ error: 'Invalid credentials' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request)
+      return addCors(new Response(JSON.stringify({ error: 'Invalid credentials' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request, null, env)
     }
 
     if (user.two_factor_enabled) {
       // Return temp token requiring 2FA
       const temp = await generateTemp2FAToken(user.id)
-      return addCors(new Response(JSON.stringify({ require2FA: true, tempToken: temp }), { status: 200, headers: { 'Content-Type': 'application/json' } }), request)
+      return addCors(new Response(JSON.stringify({ require2FA: true, tempToken: temp }), { status: 200, headers: { 'Content-Type': 'application/json' } }), request, null, env)
     }
     const token = await generateToken(user.id)
-    return addCors(new Response(JSON.stringify({ user: { id: user.id, email: normalizedEmail }, token }), { status: 200, headers: { 'Content-Type': 'application/json' } }), request)
+    return addCors(new Response(JSON.stringify({ user: { id: user.id, email: normalizedEmail }, token }), { status: 200, headers: { 'Content-Type': 'application/json' } }), request, null, env)
   } catch (e) {
-    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }), request)
+    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }), request, null, env)
   }
 })
 
@@ -383,15 +396,15 @@ router.post('/api/auth/2fa/init', async (request, env) => {
   try {
     await ensureMigration(env)
     const userId = getUserFromRequest(request)
-    if (!userId) return addCors(new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request)
+    if (!userId) return addCors(new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request, null, env)
     const user = await env.DB.prepare('SELECT two_factor_enabled, two_factor_secret, email FROM users WHERE id = ?').bind(userId).first()
-    if (user.two_factor_enabled) return addCors(new Response(JSON.stringify({ error: 'Already enabled' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request)
+    if (user.two_factor_enabled) return addCors(new Response(JSON.stringify({ error: 'Already enabled' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request, null, env)
     const secret = generateBase32Secret(32)
     await env.DB.prepare('UPDATE users SET two_factor_secret = ? WHERE id = ?').bind(secret, userId).run()
     const otpauth = `otpauth://totp/PassFortress:${encodeURIComponent(user.email)}?secret=${secret}&issuer=PassFortress`
-    return addCors(new Response(JSON.stringify({ secret, otpauth }), { status: 200, headers: { 'Content-Type': 'application/json' } }), request)
+    return addCors(new Response(JSON.stringify({ secret, otpauth }), { status: 200, headers: { 'Content-Type': 'application/json' } }), request, null, env)
   } catch (e) {
-    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }), request)
+    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }), request, null, env)
   }
 })
 
@@ -400,18 +413,18 @@ router.post('/api/auth/2fa/activate', async (request, env) => {
   try {
     await ensureMigration(env)
     const userId = getUserFromRequest(request)
-    if (!userId) return addCors(new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request)
+    if (!userId) return addCors(new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request, null, env)
     const { code } = await request.json()
-    if (!code) return addCors(new Response(JSON.stringify({ error: 'code required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request)
+    if (!code) return addCors(new Response(JSON.stringify({ error: 'code required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request, null, env)
     const user = await env.DB.prepare('SELECT two_factor_secret, two_factor_enabled FROM users WHERE id = ?').bind(userId).first()
-    if (!user.two_factor_secret) return addCors(new Response(JSON.stringify({ error: 'init required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request)
-    if (user.two_factor_enabled) return addCors(new Response(JSON.stringify({ error: 'Already enabled' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request)
+    if (!user.two_factor_secret) return addCors(new Response(JSON.stringify({ error: 'init required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request, null, env)
+    if (user.two_factor_enabled) return addCors(new Response(JSON.stringify({ error: 'Already enabled' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request, null, env)
     const ok = await verifyTOTP(user.two_factor_secret, code)
-    if (!ok) return addCors(new Response(JSON.stringify({ error: 'Invalid code' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request)
+    if (!ok) return addCors(new Response(JSON.stringify({ error: 'Invalid code' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request, null, env)
     await env.DB.prepare('UPDATE users SET two_factor_enabled = 1 WHERE id = ?').bind(userId).run()
-    return addCors(new Response(JSON.stringify({ success: true }), { status: 200, headers: { 'Content-Type': 'application/json' } }), request)
+    return addCors(new Response(JSON.stringify({ success: true }), { status: 200, headers: { 'Content-Type': 'application/json' } }), request, null, env)
   } catch (e) {
-    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }), request)
+    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }), request, null, env)
   }
 })
 
@@ -420,17 +433,17 @@ router.post('/api/auth/2fa/verify', async (request, env) => {
   try {
     await ensureMigration(env)
     const { tempToken, code } = await request.json()
-    if (!tempToken || !code) return addCors(new Response(JSON.stringify({ error: 'tempToken and code required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request)
+    if (!tempToken || !code) return addCors(new Response(JSON.stringify({ error: 'tempToken and code required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request, null, env)
     const decoded = decodeToken(tempToken)
-    if (!decoded || decoded.twofa !== 'pending') return addCors(new Response(JSON.stringify({ error: 'Invalid token' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request)
+    if (!decoded || decoded.twofa !== 'pending') return addCors(new Response(JSON.stringify({ error: 'Invalid token' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request, null, env)
     const user = await env.DB.prepare('SELECT id, email, two_factor_secret, two_factor_enabled FROM users WHERE id = ?').bind(decoded.userId).first()
-    if (!user || !user.two_factor_enabled || !user.two_factor_secret) return addCors(new Response(JSON.stringify({ error: '2FA not enabled' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request)
+    if (!user || !user.two_factor_enabled || !user.two_factor_secret) return addCors(new Response(JSON.stringify({ error: '2FA not enabled' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request, null, env)
     const ok = await verifyTOTP(user.two_factor_secret, code)
-    if (!ok) return addCors(new Response(JSON.stringify({ error: 'Invalid code' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request)
+    if (!ok) return addCors(new Response(JSON.stringify({ error: 'Invalid code' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request, null, env)
     const fullToken = await generateToken(user.id)
-    return addCors(new Response(JSON.stringify({ user: { id: user.id, email: user.email }, token: fullToken }), { status: 200, headers: { 'Content-Type': 'application/json' } }), request)
+    return addCors(new Response(JSON.stringify({ user: { id: user.id, email: user.email }, token: fullToken }), { status: 200, headers: { 'Content-Type': 'application/json' } }), request, null, env)
   } catch (e) {
-    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }), request)
+    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }), request, null, env)
   }
 })
 
@@ -439,17 +452,17 @@ router.post('/api/auth/2fa/disable', async (request, env) => {
   try {
     await ensureMigration(env)
     const userId = getUserFromRequest(request)
-    if (!userId) return addCors(new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request)
+    if (!userId) return addCors(new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request, null, env)
     const { code } = await request.json()
-    if (!code) return addCors(new Response(JSON.stringify({ error: 'code required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request)
+    if (!code) return addCors(new Response(JSON.stringify({ error: 'code required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request, null, env)
     const user = await env.DB.prepare('SELECT two_factor_secret, two_factor_enabled FROM users WHERE id = ?').bind(userId).first()
-    if (!user.two_factor_enabled || !user.two_factor_secret) return addCors(new Response(JSON.stringify({ error: 'Not enabled' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request)
+    if (!user.two_factor_enabled || !user.two_factor_secret) return addCors(new Response(JSON.stringify({ error: 'Not enabled' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request, null, env)
     const ok = await verifyTOTP(user.two_factor_secret, code)
-    if (!ok) return addCors(new Response(JSON.stringify({ error: 'Invalid code' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request)
+    if (!ok) return addCors(new Response(JSON.stringify({ error: 'Invalid code' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request, null, env)
     await env.DB.prepare('UPDATE users SET two_factor_enabled = 0, two_factor_secret = NULL WHERE id = ?').bind(userId).run()
-    return addCors(new Response(JSON.stringify({ success: true }), { status: 200, headers: { 'Content-Type': 'application/json' } }), request)
+    return addCors(new Response(JSON.stringify({ success: true }), { status: 200, headers: { 'Content-Type': 'application/json' } }), request, null, env)
   } catch (e) {
-    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }), request)
+    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }), request, null, env)
   }
 })
 
@@ -460,7 +473,7 @@ router.get('/api/passwords', async (request, env) => {
   try {
     const userId = getUserFromRequest(request)
     if (!userId) {
-      return addCors(new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request)
+      return addCors(new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request, null, env)
     }
 
     const stmt = env.DB.prepare('SELECT id, website, username, tags, password, created_at FROM passwords WHERE user_id = ? ORDER BY created_at DESC')
@@ -472,9 +485,9 @@ router.get('/api/passwords', async (request, env) => {
       password: decryptPassword(p.password, `user_${userId}`)
     }))
 
-    return addCors(new Response(JSON.stringify(decrypted), { headers: { 'Content-Type': 'application/json' } }), request)
+    return addCors(new Response(JSON.stringify(decrypted), { headers: { 'Content-Type': 'application/json' } }), request, null, env)
   } catch (e) {
-    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }), request)
+    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }), request, null, env)
   }
 })
 
@@ -483,12 +496,12 @@ router.post('/api/passwords', async (request, env) => {
   try {
     const userId = getUserFromRequest(request)
     if (!userId) {
-      return addCors(new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request)
+      return addCors(new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request, null, env)
     }
 
     const { website, username = '', tags = [], password } = await request.json()
     if (!website || !password) {
-      return addCors(new Response(JSON.stringify({ error: 'website and password required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request)
+      return addCors(new Response(JSON.stringify({ error: 'website and password required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request, null, env)
     }
 
     // Encrypt password
@@ -498,9 +511,9 @@ router.post('/api/passwords', async (request, env) => {
     const stmt = env.DB.prepare('INSERT INTO passwords (user_id, website, username, tags, password) VALUES (?, ?, ?, ?, ?) RETURNING id, website, username, tags, created_at')
     const result = await stmt.bind(userId, website, username, tagsStr, encryptedPassword).first()
 
-    return addCors(new Response(JSON.stringify({ ...result, password }), { status: 201, headers: { 'Content-Type': 'application/json' } }), request)
+    return addCors(new Response(JSON.stringify({ ...result, password }), { status: 201, headers: { 'Content-Type': 'application/json' } }), request, null, env)
   } catch (e) {
-    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }), request)
+    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }), request, null, env)
   }
 })
 
@@ -509,26 +522,26 @@ router.delete('/api/passwords/:id', async (request, env) => {
   try {
     const userId = getUserFromRequest(request)
     if (!userId) {
-      return addCors(new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request)
+      return addCors(new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request, null, env)
     }
 
     const { id } = request.params
     if (!id) {
-      return addCors(new Response(JSON.stringify({ error: 'id required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request)
+      return addCors(new Response(JSON.stringify({ error: 'id required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request, null, env)
     }
 
     // Verify ownership
     const exists = await env.DB.prepare('SELECT id FROM passwords WHERE id = ? AND user_id = ?').bind(id, userId).first()
     if (!exists) {
-      return addCors(new Response(JSON.stringify({ error: 'Password not found' }), { status: 404, headers: { 'Content-Type': 'application/json' } }), request)
+      return addCors(new Response(JSON.stringify({ error: 'Password not found' }), { status: 404, headers: { 'Content-Type': 'application/json' } }), request, null, env)
     }
 
     const stmt = env.DB.prepare('DELETE FROM passwords WHERE id = ? AND user_id = ?')
     await stmt.bind(id, userId).run()
 
-    return addCors(new Response(JSON.stringify({ success: true, id }), { headers: { 'Content-Type': 'application/json' } }), request)
+    return addCors(new Response(JSON.stringify({ success: true, id }), { headers: { 'Content-Type': 'application/json' } }), request, null, env)
   } catch (e) {
-    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }), request)
+    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }), request, null, env)
   }
 })
 
@@ -537,20 +550,20 @@ router.put('/api/passwords/:id', async (request, env) => {
   try {
     const userId = getUserFromRequest(request)
     if (!userId) {
-      return addCors(new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request)
+      return addCors(new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request, null, env)
     }
 
     const { id } = request.params
     const { website, username = '', tags = [], password } = await request.json()
     
     if (!id || !website || !password) {
-      return addCors(new Response(JSON.stringify({ error: 'id, website and password required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request)
+      return addCors(new Response(JSON.stringify({ error: 'id, website and password required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request, null, env)
     }
 
     // Verify ownership
     const exists = await env.DB.prepare('SELECT id FROM passwords WHERE id = ? AND user_id = ?').bind(id, userId).first()
     if (!exists) {
-      return addCors(new Response(JSON.stringify({ error: 'Password not found' }), { status: 404, headers: { 'Content-Type': 'application/json' } }), request)
+      return addCors(new Response(JSON.stringify({ error: 'Password not found' }), { status: 404, headers: { 'Content-Type': 'application/json' } }), request, null, env)
     }
 
     // Encrypt password
@@ -560,9 +573,9 @@ router.put('/api/passwords/:id', async (request, env) => {
     const stmt = env.DB.prepare('UPDATE passwords SET website = ?, username = ?, tags = ?, password = ? WHERE id = ? AND user_id = ?')
     await stmt.bind(website, username, tagsStr, encryptedPassword, id, userId).run()
 
-    return addCors(new Response(JSON.stringify({ success: true, id, website, username, tags }), { headers: { 'Content-Type': 'application/json' } }), request)
+    return addCors(new Response(JSON.stringify({ success: true, id, website, username, tags }), { headers: { 'Content-Type': 'application/json' } }), request, null, env)
   } catch (e) {
-    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }), request)
+    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }), request, null, env)
   }
 })
 
@@ -571,9 +584,9 @@ router.post('/api/auth/2fa/recovery/generate', async (request, env) => {
   try {
     await ensureMigration(env)
     const userId = getUserFromRequest(request)
-    if (!userId) return addCors(new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request)
+    if (!userId) return addCors(new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request, null, env)
     const user = await env.DB.prepare('SELECT two_factor_enabled FROM users WHERE id = ?').bind(userId).first()
-    if (!user || !user.two_factor_enabled) return addCors(new Response(JSON.stringify({ error: '2FA not enabled' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request)
+    if (!user || !user.two_factor_enabled) return addCors(new Response(JSON.stringify({ error: '2FA not enabled' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request, null, env)
     // Invalidate old unused codes
     await env.DB.prepare('DELETE FROM recovery_codes WHERE user_id = ? AND used = 0').bind(userId).run()
     const codes = []
@@ -584,9 +597,9 @@ router.post('/api/auth/2fa/recovery/generate', async (request, env) => {
       await env.DB.prepare('INSERT INTO recovery_codes (user_id, code_hash) VALUES (?, ?)').bind(userId, hash).run()
       codes.push(raw)
     }
-    return addCors(new Response(JSON.stringify({ codes }), { status: 201, headers: { 'Content-Type': 'application/json' } }), request)
+    return addCors(new Response(JSON.stringify({ codes }), { status: 201, headers: { 'Content-Type': 'application/json' } }), request, null, env)
   } catch (e) {
-    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }), request)
+    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }), request, null, env)
   }
 })
 
@@ -595,25 +608,25 @@ router.post('/api/auth/2fa/recovery/verify', async (request, env) => {
   try {
     await ensureMigration(env)
     const { tempToken, recoveryCode } = await request.json()
-    if (!tempToken || !recoveryCode) return addCors(new Response(JSON.stringify({ error: 'tempToken and recoveryCode required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request)
+    if (!tempToken || !recoveryCode) return addCors(new Response(JSON.stringify({ error: 'tempToken and recoveryCode required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request, null, env)
     const decoded = decodeToken(tempToken)
-    if (!decoded || decoded.twofa !== 'pending') return addCors(new Response(JSON.stringify({ error: 'Invalid token' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request)
+    if (!decoded || decoded.twofa !== 'pending') return addCors(new Response(JSON.stringify({ error: 'Invalid token' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request, null, env)
     const user = await env.DB.prepare('SELECT id, email, two_factor_enabled FROM users WHERE id = ?').bind(decoded.userId).first()
-    if (!user || !user.two_factor_enabled) return addCors(new Response(JSON.stringify({ error: '2FA not enabled' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request)
+    if (!user || !user.two_factor_enabled) return addCors(new Response(JSON.stringify({ error: '2FA not enabled' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request, null, env)
     const hashBuf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(recoveryCode.toUpperCase()))
     const hash = Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2,'0')).join('')
     const rec = await env.DB.prepare('SELECT id, used FROM recovery_codes WHERE user_id = ? AND code_hash = ?').bind(user.id, hash).first()
-    if (!rec || rec.used) return addCors(new Response(JSON.stringify({ error: 'Invalid code' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request)
+    if (!rec || rec.used) return addCors(new Response(JSON.stringify({ error: 'Invalid code' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request, null, env)
     await env.DB.prepare('UPDATE recovery_codes SET used = 1 WHERE id = ?').bind(rec.id).run()
     const fullToken = await generateToken(user.id)
-    return addCors(new Response(JSON.stringify({ user: { id: user.id, email: user.email }, token: fullToken }), { status: 200, headers: { 'Content-Type': 'application/json' } }), request)
+    return addCors(new Response(JSON.stringify({ user: { id: user.id, email: user.email }, token: fullToken }), { status: 200, headers: { 'Content-Type': 'application/json' } }), request, null, env)
   } catch (e) {
-    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }), request)
+    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }), request, null, env)
   }
 })
 
 // Fallback
-router.all('*', (request) => addCors(new Response('Not Found', { status: 404 }), request))
+router.all('*', (request) => addCors(new Response('Not Found', { status: 404 }), request, null, env))
 
 export default {
   async fetch(request, env, ctx) {
@@ -624,11 +637,11 @@ export default {
     if (url.pathname.startsWith('/api/')) {
       rateInfo = checkRateLimit(request)
       if (!rateInfo.allowed) {
-        return applySecurityHeaders(new Response(JSON.stringify({ error: 'Rate limit exceeded' }), { status: 429, headers: { 'Content-Type': 'application/json' } }), request, rateInfo)
+        return applySecurityHeaders(new Response(JSON.stringify({ error: 'Rate limit exceeded' }), { status: 429, headers: { 'Content-Type': 'application/json' } }), request, rateInfo, env)
       }
       await ensureMigration(env)
       const apiResp = await router.handle(request, env, ctx)
-      return applySecurityHeaders(apiResp, request, rateInfo)
+      return applySecurityHeaders(apiResp, request, rateInfo, env)
     }
     
     // For root path, serve HTML directly from ASSETS
@@ -643,13 +656,13 @@ export default {
             headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
             headers.set('Pragma', 'no-cache');
             headers.set('Expires', '0');
-            return applySecurityHeaders(new Response(assetResp.body, { status: 200, headers }), request);
+            return applySecurityHeaders(new Response(assetResp.body, { status: 200, headers }), request, null, env);
           }
         } catch (e) {
           console.error('ASSETS error:', e);
         }
       }
-      return applySecurityHeaders(new Response('Service temporarily unavailable', { status: 503 }), request);
+      return applySecurityHeaders(new Response('Service temporarily unavailable', { status: 503 }), request, null, env);
     }
     
     // Try to serve other static assets
@@ -660,7 +673,7 @@ export default {
           const headers = new Headers(assetResponse.headers);
           headers.set('Cache-Control', 'no-cache, no-store, must-revalidate');
           const resp = new Response(assetResponse.body, { status: assetResponse.status, statusText: assetResponse.statusText, headers })
-          return applySecurityHeaders(resp, request)
+          return applySecurityHeaders(resp, request, null, env)
         }
       } catch (e) {
         // Asset not found, continue
@@ -669,6 +682,6 @@ export default {
     
     // Fallback to router for other requests
     const r = await router.handle(request, env, ctx)
-    return applySecurityHeaders(r, request)
+    return applySecurityHeaders(r, request, null, env)
   }
 }
