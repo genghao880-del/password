@@ -17,6 +17,16 @@ async function ensureMigration(env) {
     if (needSecret) {
       await env.DB.prepare('ALTER TABLE users ADD COLUMN two_factor_secret TEXT').run()
     }
+    // Add username column to passwords if missing
+    const pinfo = await env.DB.prepare('PRAGMA table_info(passwords)').all()
+    const pcols = pinfo.results.map(c => c.name)
+    if (!pcols.includes('username')) {
+      try {
+        await env.DB.prepare('ALTER TABLE passwords ADD COLUMN username TEXT DEFAULT ""').run()
+      } catch (e) {
+        // ignore
+      }
+    }
   } catch (e) {
     // swallow errors to avoid breaking requests
   } finally {
@@ -436,7 +446,7 @@ router.get('/api/passwords', async (request, env) => {
       return addCors(new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request)
     }
 
-    const stmt = env.DB.prepare('SELECT id, website, password, created_at FROM passwords WHERE user_id = ? ORDER BY created_at DESC')
+    const stmt = env.DB.prepare('SELECT id, website, username, password, created_at FROM passwords WHERE user_id = ? ORDER BY created_at DESC')
     const results = await stmt.bind(userId).all()
 
     // Decrypt passwords (in frontend)
@@ -459,7 +469,7 @@ router.post('/api/passwords', async (request, env) => {
       return addCors(new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request)
     }
 
-    const { website, password } = await request.json()
+    const { website, username = '', password } = await request.json()
     if (!website || !password) {
       return addCors(new Response(JSON.stringify({ error: 'website and password required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request)
     }
@@ -467,8 +477,8 @@ router.post('/api/passwords', async (request, env) => {
     // Encrypt password
     const encryptedPassword = encryptPassword(password, `user_${userId}`)
 
-    const stmt = env.DB.prepare('INSERT INTO passwords (user_id, website, password) VALUES (?, ?, ?) RETURNING id, website, created_at')
-    const result = await stmt.bind(userId, website, encryptedPassword).first()
+    const stmt = env.DB.prepare('INSERT INTO passwords (user_id, website, username, password) VALUES (?, ?, ?, ?) RETURNING id, website, username, created_at')
+    const result = await stmt.bind(userId, website, username, encryptedPassword).first()
 
     return addCors(new Response(JSON.stringify({ ...result, password }), { status: 201, headers: { 'Content-Type': 'application/json' } }), request)
   } catch (e) {
@@ -513,7 +523,7 @@ router.put('/api/passwords/:id', async (request, env) => {
     }
 
     const { id } = request.params
-    const { website, password } = await request.json()
+    const { website, username = '', password } = await request.json()
     
     if (!id || !website || !password) {
       return addCors(new Response(JSON.stringify({ error: 'id, website and password required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request)
@@ -528,10 +538,10 @@ router.put('/api/passwords/:id', async (request, env) => {
     // Encrypt password
     const encryptedPassword = encryptPassword(password, `user_${userId}`)
 
-    const stmt = env.DB.prepare('UPDATE passwords SET website = ?, password = ? WHERE id = ? AND user_id = ?')
-    await stmt.bind(website, encryptedPassword, id, userId).run()
+    const stmt = env.DB.prepare('UPDATE passwords SET website = ?, username = ?, password = ? WHERE id = ? AND user_id = ?')
+    await stmt.bind(website, username, encryptedPassword, id, userId).run()
 
-    return addCors(new Response(JSON.stringify({ success: true, id, website }), { headers: { 'Content-Type': 'application/json' } }), request)
+    return addCors(new Response(JSON.stringify({ success: true, id, website, username }), { headers: { 'Content-Type': 'application/json' } }), request)
   } catch (e) {
     return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }), request)
   }

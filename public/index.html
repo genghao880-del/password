@@ -57,6 +57,7 @@
                     showPassword: false,
                     generatedPassword: '',
                     newWebsite: '',
+                    newUsername: '',
                     newPassword: '',
                     email: '',
                     password: '',
@@ -285,7 +286,7 @@
 
             async savePassword() {
                 if (!this.state.newWebsite || !this.state.newPassword) {
-                    this.showToast('Please fill in both website and password', 'error');
+                    this.showToast('请填写网站与密码', 'error');
                     return;
                 }
                 try {
@@ -295,19 +296,20 @@
                             'Content-Type': 'application/json',
                             'Authorization': `Bearer ${this.state.token}`
                         },
-                        body: JSON.stringify({ website: this.state.newWebsite, password: this.state.newPassword })
+                        body: JSON.stringify({ website: this.state.newWebsite, username: this.state.newUsername, password: this.state.newPassword })
                     });
                     if (res.ok) {
                         this.state.newWebsite = '';
+                        this.state.newUsername = '';
                         this.state.newPassword = '';
                         this.state.generatedPassword = '';
                         await this.loadPasswords();
-                        this.showToast('Password saved successfully! ✅', 'success');
+                        this.showToast('保存成功 ✅', 'success');
                     } else {
-                        this.showToast('Failed to save password', 'error');
+                        this.showToast('保存失败', 'error');
                     }
                 } catch (e) {
-                    this.showToast('Error saving password: ' + e.message, 'error');
+                    this.showToast('保存错误: ' + e.message, 'error');
                 }
             }
 
@@ -345,10 +347,11 @@
                 this.render();
             }
 
-            startEditPassword(id, website, password) {
+            startEditPassword(id, website, password, username = '') {
                 this.state.editingPasswordId = id;
                 this.state.newWebsite = website;
                 this.state.newPassword = password;
+                this.state.newUsername = username;
                 this.render();
                 setTimeout(() => {
                     document.getElementById('website')?.focus();
@@ -357,7 +360,7 @@
 
             async updatePassword() {
                 if (!this.state.newWebsite || !this.state.newPassword) {
-                    this.showToast('Please fill in both website and password', 'error');
+                    this.showToast('请填写网站与密码', 'error');
                     return;
                 }
                 try {
@@ -367,19 +370,20 @@
                             'Content-Type': 'application/json',
                             'Authorization': `Bearer ${this.state.token}`
                         },
-                        body: JSON.stringify({ website: this.state.newWebsite, password: this.state.newPassword })
+                        body: JSON.stringify({ website: this.state.newWebsite, username: this.state.newUsername, password: this.state.newPassword })
                     });
                     if (res.ok) {
                         this.state.newWebsite = '';
+                        this.state.newUsername = '';
                         this.state.newPassword = '';
                         this.state.editingPasswordId = null;
                         await this.loadPasswords();
-                        this.showToast('Password updated! ✏️', 'success');
+                        this.showToast('已更新 ✏️', 'success');
                     } else {
-                        this.showToast('Failed to update password', 'error');
+                        this.showToast('更新失败', 'error');
                     }
                 } catch (e) {
-                    this.showToast('Error updating password: ' + e.message, 'error');
+                    this.showToast('更新错误: ' + e.message, 'error');
                 }
             }
 
@@ -402,7 +406,14 @@
             }
 
             exportPasswords() {
-                const data = JSON.stringify(this.state.allPasswords, null, 2);
+                const enriched = this.state.allPasswords.map(p => ({
+                    id: p.id,
+                    website: p.website,
+                    username: p.username || '',
+                    password: p.password,
+                    created_at: p.created_at
+                }));
+                const data = JSON.stringify(enriched, null, 2);
                 const blob = new Blob([data], { type: 'application/json' });
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
@@ -410,7 +421,7 @@
                 a.download = `passwords-backup-${new Date().toISOString().split('T')[0]}.json`;
                 a.click();
                 URL.revokeObjectURL(url);
-                this.showToast('Passwords exported! 📦', 'success');
+                this.showToast('已导出 📦', 'success');
             }
 
             importPasswords() {
@@ -430,14 +441,14 @@
                                     'Content-Type': 'application/json',
                                     'Authorization': `Bearer ${this.state.token}`
                                 },
-                                body: JSON.stringify({ website: pwd.website, password: pwd.password })
+                                body: JSON.stringify({ website: pwd.website, username: pwd.username || '', password: pwd.password })
                             });
                         }
                         
                         await this.loadPasswords();
-                        this.showToast(`Imported ${imported.length} passwords! 📥`, 'success');
+                        this.showToast(`导入 ${imported.length} 条密码 📥`, 'success');
                     } catch (e) {
-                        this.showToast('Failed to import: ' + e.message, 'error');
+                        this.showToast('导入失败: ' + e.message, 'error');
                     }
                 };
                 input.click();
@@ -688,6 +699,7 @@
                                                                     <p class="font-bold text-purple-300 text-lg truncate max-w-[180px]" title="${p.website}">${p.website}</p>
                                                                 </div>
                                                                 <p class="text-sm text-gray-400 font-mono ml-8 break-all">${this.state.visiblePasswords[p.id] ? p.password : '••••••••••••'}</p>
+                                                                ${p.username ? `<p class='text-xs text-blue-300 ml-8 break-all'>👤 ${p.username}</p>` : ''}
                                                                 <div class="flex items-center gap-3 mt-2 ml-8">
                                                                     <p class="text-xs text-gray-500">📅 ${new Date(p.created_at).toLocaleDateString()}</p>
                                                                     <p class="text-xs" style="color: ${age.color === 'red' ? '#f87171' : age.color === 'yellow' ? '#facc15' : '#4ade80'}">${age.warning ? '⚠️ ' : ''}${age.text}</p>
@@ -700,7 +712,7 @@
                                                                 <button onclick="manager.copyToClipboard('${p.password}')" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-lg transition text-sm" title="复制">
                                                                     📋
                                                                 </button>
-                                                                <button onclick="manager.startEditPassword(${p.id}, '${p.website}', '${p.password}')" class="bg-cyan-600 hover:bg-cyan-700 text-white px-3 py-2 rounded-lg transition text-sm" title="编辑">
+                                                                <button onclick="manager.startEditPassword(${p.id}, '${p.website}', '${p.password}', '${(p.username||'').replace(/'/g, "&#39;")}')" class="bg-cyan-600 hover:bg-cyan-700 text-white px-3 py-2 rounded-lg transition text-sm" title="编辑">
                                                                     ✏️
                                                                 </button>
                                                                 <button onclick="manager.deletePassword(${p.id})" class="bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded-lg transition text-sm" title="删除">
@@ -768,7 +780,10 @@
                                     <div class="bg-slate-800 border border-purple-500 rounded-lg p-6 shadow-2xl">
                                         <h2 class="text-2xl font-bold text-white mb-4">${this.state.editingPasswordId ? '✏️ 编辑密码' : '💾 保存密码'}</h2>
                                         <div class="space-y-3">
-                                            <input type="text" placeholder="网站 (例如：gmail.com)" value="${this.state.newWebsite}" class="w-full bg-slate-700 text-white p-3 rounded-lg border border-purple-500 focus:outline-none focus:border-pink-500" id="website" />
+                                            <div class="flex gap-2">
+                                                <input type="text" placeholder="网站 (例如：gmail.com)" value="${this.state.newWebsite}" class="w-1/2 bg-slate-700 text-white p-3 rounded-lg border border-purple-500 focus:outline-none focus:border-pink-500" id="website" />
+                                                <input type="text" placeholder="用户名 (例如：user123)" value="${this.state.newUsername}" class="w-1/2 bg-slate-700 text-white p-3 rounded-lg border border-purple-500 focus:outline-none focus:border-pink-500" id="username" oninput="manager.state.newUsername=this.value" />
+                                            </div>
                                             <input type="password" placeholder="密码" value="${this.state.newPassword}" class="w-full bg-slate-700 text-white p-3 rounded-lg border border-purple-500 focus:outline-none focus:border-pink-500 font-mono" id="password" />
                                             ${this.state.editingPasswordId ? `
                                                 <div class="flex gap-2">
