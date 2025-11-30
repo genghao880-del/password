@@ -18,7 +18,8 @@
 
 ## 文档
 - 综合指南：`docs/PROJECT_GUIDE.md`
-- 许可证：`LICENSE`
+- 贡献指南：`docs/CONTRIBUTING.md`
+- 许可证：`docs/LICENSE`
 
 ## 展示与访问
 - 站点：`https://661985.xyz`
