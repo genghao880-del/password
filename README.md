@@ -14,7 +14,7 @@
 - 部署：`npx wrangler deploy`
 
 ## 环境变量
-- `CUSTOM_DOMAIN`：设置自定义域名（例如 `661985.xyz`），用于 CORS/CSP 等逻辑。
+- `CUSTOM_DOMAIN`：设置自定义域名（例如 `example.com`），用于 CORS/CSP 等逻辑。
 
 ## 文档
 - 综合指南：`docs/PROJECT_GUIDE.md`
@@ -22,8 +22,8 @@
 - 许可证：`docs/LICENSE`
 
 ## 展示与访问
-- 站点：`https://661985.xyz`
-- Worker：`https://password.genghao880.workers.dev`
+- 配置你的域名后访问
+- Worker URL 格式：`https://your-worker-name.your-account.workers.dev`
 
 ## 贡献
 - 欢迎 PR。请提供清晰的提交说明，描述改动与影响。

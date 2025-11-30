@@ -10,7 +10,7 @@ directory = "public"
 
 # Environment variables (optional)
 [vars]
-CUSTOM_DOMAIN = "661985.xyz"
+CUSTOM_DOMAIN = "example.com"
 
 # 文档与展示约定：
 # - 对外 README 精简链接到 docs/PROJECT_GUIDE.md

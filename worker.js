@@ -108,7 +108,7 @@ async function generateToken(userId) {
     userId,
     exp: Math.floor(Date.now() / 1000) + 86400 * 7 // 7 days
   }))
-  const signature = btoa('demo-secret-key') // In production, use proper HMAC
+  const signature = btoa('CHANGE_ME_IN_PRODUCTION') // TODO: Use env.JWT_SECRET with proper HMAC
   return `${header}.${payload}.${signature}`
 }
 
@@ -116,7 +116,7 @@ async function generateToken(userId) {
 async function generateTemp2FAToken(userId) {
   const header = btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))
   const payload = btoa(JSON.stringify({ userId, twofa: 'pending', exp: Math.floor(Date.now() / 1000) + 300 }))
-  const signature = btoa('demo-secret-key')
+  const signature = btoa('CHANGE_ME_IN_PRODUCTION') // TODO: Use env.JWT_SECRET
   return `${header}.${payload}.${signature}`
 }
 

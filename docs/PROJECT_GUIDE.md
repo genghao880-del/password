@@ -5,7 +5,7 @@
 ## 概览
 - 平台：Cloudflare Workers + D1 数据库
 - 前端：原生 JS + 本地构建的 Tailwind CSS
-- 部署域名：`661985.xyz`（通过 `CUSTOM_DOMAIN` 环境变量配置）
+- 部署域名：通过 `CUSTOM_DOMAIN` 环境变量配置自定义域名
 
 ## 快速开始
 - 安装依赖：`npm i`
@@ -15,7 +15,7 @@
 ## 部署
 1. 确保 Cloudflare 账号已登录：`npx wrangler login`
 2. 设置环境变量（Wrangler `wrangler.toml` 中）：
-   - `CUSTOM_DOMAIN = "661985.xyz"`
+   - `CUSTOM_DOMAIN = "your-domain.com"`
 3. 部署命令：`npx wrangler deploy`
 4. Worker 绑定：
    - D1：`DB`（在 `wrangler.toml` 中已配置）
