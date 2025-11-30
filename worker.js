@@ -3,6 +3,7 @@ import { Router } from 'itty-router'
 // Import our modular routes
 import authRoutes from './src/routes/authRoutes'
 import passwordRoutes from './src/routes/passwordRoutes'
+import { generateToken, verifyToken, generateTemp2FAToken, decodeToken } from './src/utils/security'
 
 const router = Router()
 
@@ -66,13 +67,6 @@ async function tableExists(env, tableName) {
   } catch { return false }
 }
 
-// Base64 helpers
-function base64ToBytes(str) {
-  return Uint8Array.from(atob(str), c => c.charCodeAt(0))
-}
-function bytesToBase64(bytes) {
-  return btoa(String.fromCharCode(...bytes))
-}
 
 // Legacy hash (backwards compatibility for existing accounts)
 async function legacyHashPassword(password) {
@@ -210,176 +204,8 @@ function decodeToken(token, env) {
   }
 }
 
-// Extract user from request
-async function getUserFromRequest(request, env) {
-  const auth = request.headers.get('Authorization')
-  if (!auth || !auth.startsWith('Bearer ')) return null
-  const token = auth.slice(7)
-  return await verifyToken(token, env)
-}
 
-// Encryption (updated to use AES-GCM for production)
-async function encryptPassword(password, keyMaterial) {
-  // Create a key from the key material
-  const keyBytes = new TextEncoder().encode(keyMaterial);
-  const key = await crypto.subtle.importKey(
-    'raw',
-    keyBytes,
-    { name: 'PBKDF2' },
-    false,
-    ['deriveKey']
-  );
 
-  // Derive an AES-GCM key
-  const aesKey = await crypto.subtle.deriveKey(
-    {
-      name: 'PBKDF2',
-      salt: new TextEncoder().encode('salt_for_passfortress'),
-      iterations: 100000,
-      hash: 'SHA-256'
-    },
-    key,
-    { name: 'AES-GCM', length: 256 },
-    false,
-    ['encrypt']
-  );
-
-  // Generate a random IV
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-
-  // Encrypt the password
-  const plaintextBytes = new TextEncoder().encode(password);
-  const ciphertext = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv },
-    aesKey,
-    plaintextBytes
-  );
-
-  // Combine IV and ciphertext
-  const combined = new Uint8Array(iv.length + ciphertext.byteLength);
-  combined.set(iv, 0);
-  combined.set(new Uint8Array(ciphertext), iv.length);
-
-  // Return as base64
-  const bytes = new Uint8Array(combined.buffer);
-  let binaryString = '';
-  for (let i = 0; i < bytes.byteLength; i++) {
-    binaryString += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binaryString);
-}
-
-async function decryptPassword(encryptedPassword, keyMaterial) {
-  // Create a key from the key material
-  const keyBytes = new TextEncoder().encode(keyMaterial);
-  const key = await crypto.subtle.importKey(
-    'raw',
-    keyBytes,
-    { name: 'PBKDF2' },
-    false,
-    ['deriveKey']
-  );
-
-  // Derive the AES-GCM key
-  const aesKey = await crypto.subtle.deriveKey(
-    {
-      name: 'PBKDF2',
-      salt: new TextEncoder().encode('salt_for_passfortress'),
-      iterations: 100000,
-      hash: 'SHA-256'
-    },
-    key,
-    { name: 'AES-GCM', length: 256 },
-    false,
-    ['decrypt']
-  );
-
-  // Decode from base64
-  const binaryString = atob(encryptedPassword);
-  const bytes = new Uint8Array(binaryString.length);
-  for (let i = 0; i < binaryString.length; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
-  }
-  const combined = bytes.buffer;
-
-  const combinedBytes = new Uint8Array(combined);
-
-  // Extract IV and ciphertext
-  const iv = combinedBytes.slice(0, 12);
-  const ciphertext = combinedBytes.slice(12);
-
-  // Decrypt
-  const plaintextBuffer = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv },
-    aesKey,
-    ciphertext
-  );
-
-  // Convert to string
-  return new TextDecoder().decode(plaintextBuffer);
-}
-
-// ============ TOTP 2FA Helpers ============
-// Base32 decode (RFC 4648, no padding required)
-function base32Decode(str) {
-  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
-  let bits = ''
-  let out = []
-  const clean = str.replace(/=+$/,'').toUpperCase()
-  for (const c of clean) {
-    const val = alphabet.indexOf(c)
-    if (val < 0) continue
-    bits += val.toString(2).padStart(5,'0')
-    while (bits.length >= 8) {
-      out.push(parseInt(bits.slice(0,8),2))
-      bits = bits.slice(8)
-    }
-  }
-  return new Uint8Array(out)
-}
-
-// Generate random base32 secret
-function generateBase32Secret(length = 32) {
-  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
-  const bytes = crypto.getRandomValues(new Uint8Array(length))
-  let out = ''
-  for (const b of bytes) out += alphabet[b % alphabet.length]
-  return out
-}
-
-async function generateTOTP(secret, timeStep = 30, digits = 6) {
-  const keyBytes = base32Decode(secret)
-  const counter = Math.floor(Date.now() / 1000 / timeStep)
-  const buf = new ArrayBuffer(8)
-  const view = new DataView(buf)
-  view.setUint32(4, counter) // low 32 bits
-  // Import HMAC key
-  const cryptoKey = await crypto.subtle.importKey('raw', keyBytes, { name: 'HMAC', hash: 'SHA-1' }, false, ['sign'])
-  const hmac = new Uint8Array(await crypto.subtle.sign('HMAC', cryptoKey, buf))
-  const offset = hmac[hmac.length - 1] & 0x0f
-  const binary = ((hmac[offset] & 0x7f) << 24) | ((hmac[offset + 1] & 0xff) << 16) | ((hmac[offset + 2] & 0xff) << 8) | (hmac[offset + 3] & 0xff)
-  const otp = (binary % (10 ** digits)).toString().padStart(digits, '0')
-  return otp
-}
-
-async function verifyTOTP(secret, code) {
-  if (!/^[0-9]{6}$/.test(code)) return false
-  // Allow small drift ±1 window
-  for (let drift = -1; drift <= 1; drift++) {
-    const keyBytes = base32Decode(secret)
-    const counter = Math.floor(Date.now() / 1000 / 30) + drift
-    const buf = new ArrayBuffer(8)
-    const view = new DataView(buf)
-    view.setUint32(4, counter)
-    const cryptoKey = await crypto.subtle.importKey('raw', keyBytes, { name: 'HMAC', hash: 'SHA-1' }, false, ['sign'])
-    const hmac = new Uint8Array(await crypto.subtle.sign('HMAC', cryptoKey, buf))
-    const offset = hmac[hmac.length - 1] & 0x0f
-    const binary = ((hmac[offset] & 0x7f) << 24) | ((hmac[offset + 1] & 0xff) << 16) | ((hmac[offset + 2] & 0xff) << 8) | (hmac[offset + 3] & 0xff)
-    const otp = (binary % (10 ** 6)).toString().padStart(6, '0')
-    if (otp === code) return true
-  }
-  return false
-}
 
 // ============ CORS Middleware ============
 // 从环境变量或请求自动检测允许的�?
