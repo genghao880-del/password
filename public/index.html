@@ -6,11 +6,11 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate, max-age=0" />
     <meta http-equiv="Pragma" content="no-cache" />
     <meta http-equiv="Expires" content="0" />
-    <meta name="version" content="2025-11-30-v5" />
+    <meta name="version" content="2025-11-30-v7" />
     <title>PassFortress - Secure Password Manager</title>
     <script>
         // 强制清除缓存并重新加载
-        const CURRENT_VERSION = '2025-11-30-v5';
+        const CURRENT_VERSION = '2025-11-30-v7';
         const storedVersion = localStorage.getItem('app-version');
         if (storedVersion !== CURRENT_VERSION) {
             console.log('New version detected, clearing cache...');
@@ -62,6 +62,24 @@
         body.client-desktop .btn-hover { transition: transform .12s ease, box-shadow .12s ease; }
         body.client-desktop .btn-hover:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(0,0,0,.25); }
         body.client-mobile .btn-hover { transition: none; }
+        /* Enhanced icon buttons */
+        .icon-btn {
+            font-size: 1.25rem;
+            line-height: 1;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 2.5rem;
+            min-height: 2.5rem;
+            transition: all 0.2s ease;
+        }
+        .icon-btn:hover {
+            transform: scale(1.1) translateY(-2px);
+            box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+        }
+        .icon-btn:active {
+            transform: scale(0.95);
+        }
         /* Generator panel overflow guard */
         .panel-scroll { overflow: hidden; }
         .panel-scroll .panel-inner { max-height: 420px; overflow-y: auto; word-break: break-word; }
@@ -69,10 +87,86 @@
     </style>
 </head>
 <body class="text-gray-200">
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
     <div id="app"></div>
 
     <script>
         const API_BASE = window.location.origin;
+        // Fetch public runtime config (Turnstile sitekey, domain)
+        let __PUBLIC_CONFIG = { sitekey: '', domain: '' };
+        async function loadPublicConfig() {
+            try {
+                const res = await fetch(`${API_BASE}/api/config`);
+                if (res.ok) {
+                    __PUBLIC_CONFIG = await res.json();
+                }
+            } catch(e) {}
+        }
+        // Turnstile minimal integration: render and keep latest token
+        window.__turnstileToken = '';
+        async function setupTurnstile() {
+            if (!__PUBLIC_CONFIG.sitekey) { await loadPublicConfig(); }
+            if (!window.turnstile) { setTimeout(setupTurnstile, 500); return; }
+            const container = document.createElement('div');
+            container.id = 'cf-turnstile';
+            container.className = 'fixed bottom-2 right-2';
+            document.body.appendChild(container);
+            try {
+                window.turnstile.render('#cf-turnstile', {
+                    sitekey: __PUBLIC_CONFIG.sitekey || 'CHANGE_ME_SITEKEY',
+                    size: 'invisible',
+                    callback: function(token) { window.__turnstileToken = token; },
+                    'error-callback': function(){ window.__turnstileToken = ''; },
+                    'timeout-callback': function(){ window.__turnstileToken = ''; }
+                });
+                // 初次执行以获取令牌
+                window.turnstile.execute('#cf-turnstile');
+            } catch(e) { /* ignore */ }
+        }
+        setupTurnstile();
+
+        // 可视化状态徽章（联调用）
+        (function renderTokenBadge(){
+            const badge = document.createElement('div');
+            badge.id = 'cf-badge';
+            badge.className = 'fixed bottom-2 left-2 px-3 py-1 rounded bg-black/50 text-xs';
+            badge.style.zIndex = '9999';
+            document.body.appendChild(badge);
+            setInterval(()=>{
+                const has = !!window.__turnstileToken;
+                badge.textContent = has ? 'Turnstile: OK' : 'Turnstile: WAITING';
+                badge.style.backgroundColor = has ? '#064e3b' : '#4b5563';
+            }, 500);
+        })();
+
+        // 获取最新 Turnstile 令牌（执行并等待回调）
+        async function getTurnstileToken(action = '') {
+            try {
+                if (!window.turnstile) return '';
+                window.__turnstileToken = '';
+                window.turnstile.execute('#cf-turnstile', { action });
+                const deadline = Date.now() + 4000; // 最长等待 4 秒
+                while (Date.now() < deadline) {
+                    await new Promise(r => setTimeout(r, 120));
+                    if (window.__turnstileToken) return window.__turnstileToken;
+                }
+            } catch(e) {}
+            // 若无法获取令牌，切换为可视模式，提示用户点击验证
+            try {
+                const host = document.getElementById('cf-turnstile');
+                if (host) {
+                    host.innerHTML = '';
+                    window.turnstile.render('#cf-turnstile', {
+                        sitekey: __PUBLIC_CONFIG.sitekey || 'CHANGE_ME_SITEKEY',
+                        size: 'compact',
+                        callback: function(token) { window.__turnstileToken = token; },
+                        'error-callback': function(){ window.__turnstileToken = ''; },
+                        'timeout-callback': function(){ window.__turnstileToken = ''; }
+                    });
+                }
+            } catch(e) {}
+            return '';
+        }
 
         class PasswordManager {
             constructor() {
@@ -116,6 +210,8 @@
                     ,showDeleteConfirm: false
                     ,deleteTargetId: null
                     ,clientInfo: this.detectClient()
+                    ,lastSaved: { website: '', username: '', password: '' }
+                    ,editingOriginal: { website: '', username: '', password: '' }
                 };
                 this.toastTimer = null;
                 this.init();
@@ -144,14 +240,15 @@
                 return { isMobile, platform, browser };
             }
 
-            init() {
+            async init() {
                 const savedToken = localStorage.getItem('token');
                 const savedUser = localStorage.getItem('user');
                 if (savedToken && savedUser) {
                     this.state.token = savedToken;
                     this.state.user = JSON.parse(savedUser);
                     this.state.screen = 'app';
-                    this.loadPasswords();
+                    await this.loadPasswords();
+                    this.render();
                 } else {
                     this.render();
                 }
@@ -206,10 +303,11 @@
                     this.showToast('Password too weak (≥8 & 3 types)', 'error');
                     return;
                 }
+                const token = await getTurnstileToken('register');
                 try {
                     const res = await fetch(`${API_BASE}/api/auth/register`, {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: { 'Content-Type': 'application/json', 'X-CF-Turnstile': token },
                         body: JSON.stringify({ email: this.state.email, password: this.state.password })
                     });
                     if (res.ok) {
@@ -225,7 +323,7 @@
                         this.render();
                     } else {
                         const error = await res.json();
-                        this.showToast('Registration failed: ' + error.error, 'error');
+                        this.showToast('Registration failed: ' + error.error + (error['error-codes'] ? ' [' + error['error-codes'].join(',') + ']' : ''), 'error');
                     }
                 } catch (e) {
                     this.showToast('Error: ' + e.message, 'error');
@@ -243,10 +341,11 @@
                     this.showToast('Invalid email format', 'error');
                     return;
                 }
+                const token = await getTurnstileToken('login');
                 try {
                     const res = await fetch(`${API_BASE}/api/auth/login`, {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: { 'Content-Type': 'application/json', 'X-CF-Turnstile': token },
                         body: JSON.stringify({ email: this.state.email, password: this.state.password })
                     });
                     const data = await res.json();
@@ -301,6 +400,7 @@
                     if (res.ok) {
                         this.state.allPasswords = await res.json();
                         this.filterPasswords();
+                        this.render();
                     }
                 } catch (e) {
                     console.error('Failed to load passwords:', e);
@@ -366,8 +466,16 @@
             }
 
             async savePassword() {
-                if (!this.state.newWebsite || !this.state.newPassword) {
+                const website = (this.state.newWebsite || '').trim();
+                const password = (this.state.newPassword || '').trim();
+                const username = (this.state.newUsername || '').trim();
+                if (!website || !password) {
                     this.showToast('请填写网站与密码', 'error');
+                    return;
+                }
+                const last = this.state.lastSaved || { website: '', username: '', password: '' };
+                if (last.website === website && last.username === username && last.password === password) {
+                    this.showToast('无需重复添加', 'info');
                     return;
                 }
                 try {
@@ -377,17 +485,25 @@
                             'Content-Type': 'application/json',
                             'Authorization': `Bearer ${this.state.token}`
                         },
-                        body: JSON.stringify({ website: this.state.newWebsite, username: this.state.newUsername, tags: [], password: this.state.newPassword })
+                        body: JSON.stringify({ website, username, tags: [], password })
                     });
                     if (res.ok) {
-                        this.state.newWebsite = '';
-                        this.state.newUsername = '';
-                        this.state.newPassword = '';
-                        this.state.generatedPassword = '';
-                        await this.loadPasswords();
-                        this.showToast('保存成功 ✅', 'success');
+                        const data = await res.json();
+                        if (data && data.id) {
+                            this.state.lastSaved = { website, username, password };
+                            this.state.newWebsite = '';
+                            this.state.newUsername = '';
+                            this.state.newPassword = '';
+                            this.state.generatedPassword = '';
+                            await this.loadPasswords();
+                            this.render();
+                            this.showToast('保存成功 ✅', 'success');
+                        } else {
+                            this.showToast('保存失败：返回数据异常', 'error');
+                        }
                     } else {
-                        this.showToast('保存失败', 'error');
+                        const error = await res.json().catch(() => ({}));
+                        this.showToast('保存失败: ' + (error.error || res.statusText || '未知错误'), 'error');
                     }
                 } catch (e) {
                     this.showToast('保存错误: ' + e.message, 'error');
@@ -432,6 +548,7 @@
                 this.state.newWebsite = website;
                 this.state.newPassword = password;
                 this.state.newUsername = username;
+                this.state.editingOriginal = { website, username, password };
                 this.render();
                 setTimeout(() => {
                     document.getElementById('website')?.focus();
@@ -439,8 +556,16 @@
             }
 
             async updatePassword() {
-                if (!this.state.newWebsite || !this.state.newPassword) {
+                const website = (this.state.newWebsite || '').trim();
+                const password = (this.state.newPassword || '').trim();
+                const username = (this.state.newUsername || '').trim();
+                if (!website || !password) {
                     this.showToast('请填写网站与密码', 'error');
+                    return;
+                }
+                const original = this.state.editingOriginal || { website: '', username: '', password: '' };
+                if (original.website === website && original.username === username && original.password === password) {
+                    this.showToast('未改动，无需保存', 'info');
                     return;
                 }
                 try {
@@ -450,14 +575,16 @@
                             'Content-Type': 'application/json',
                             'Authorization': `Bearer ${this.state.token}`
                         },
-                        body: JSON.stringify({ website: this.state.newWebsite, username: this.state.newUsername, tags: [], password: this.state.newPassword })
+                        body: JSON.stringify({ website, username, tags: [], password })
                     });
                     if (res.ok) {
                         this.state.newWebsite = '';
                         this.state.newUsername = '';
                         this.state.newPassword = '';
                         this.state.editingPasswordId = null;
+                        this.state.editingOriginal = null;
                         await this.loadPasswords();
+                        this.render();
                         this.showToast('已更新 ✏️', 'success');
                     } else {
                         this.showToast('更新失败', 'error');
@@ -470,7 +597,9 @@
             cancelEdit() {
                 this.state.editingPasswordId = null;
                 this.state.newWebsite = '';
+                this.state.newUsername = '';
                 this.state.newPassword = '';
+                this.state.editingOriginal = null;
                 this.render();
             }
 
@@ -807,20 +936,20 @@
                                     <p class="text-gray-400 text-xs sm:text-sm">欢迎，<span class="text-[#F48120] font-semibold">${this.state.user.email}</span></p>
                                     <p class="text-gray-500 text-[10px] mt-0.5">${this.state.clientInfo.isMobile ? '📱' : '💻'} ${this.state.clientInfo.platform} · ${this.state.clientInfo.browser}</p>
                                 </div>
-                                <div class="flex flex-wrap gap-1.5">
-                                    <button onclick="manager.toggleTheme()" class="btn-hover bg-slate-700 hover:bg-slate-600 text-white text-xs py-1.5 px-2.5 rounded-lg transition" title="主题">
+                                <div class="flex flex-wrap gap-2">
+                                    <button onclick="manager.toggleTheme()" class="icon-btn btn-hover bg-slate-700 hover:bg-slate-600 text-white py-2 px-3 rounded-lg transition" title="主题">
                                         ${this.state.theme === 'dark' ? '☀️' : '🌙'}
                                     </button>
-                                    <button onclick="manager.exportPasswords()" class="btn-hover bg-blue-600 hover:bg-blue-700 text-white text-xs py-1.5 px-2.5 rounded-lg transition" title="导出">
+                                    <button onclick="manager.exportPasswords()" class="icon-btn btn-hover bg-blue-600 hover:bg-blue-700 text-white py-2 px-3 rounded-lg transition" title="导出">
                                         📦
                                     </button>
-                                    <button onclick="manager.importPasswords()" class="btn-hover bg-green-600 hover:bg-green-700 text-white text-xs py-1.5 px-2.5 rounded-lg transition" title="导入">
+                                    <button onclick="manager.importPasswords()" class="icon-btn btn-hover bg-green-600 hover:bg-green-700 text-white py-2 px-3 rounded-lg transition" title="导入">
                                         📥
                                     </button>
-                                    <button onclick="manager.open2FA()" class="btn-hover bg-indigo-600 hover:bg-indigo-700 text-white text-xs py-1.5 px-2.5 rounded-lg transition" title="2FA">
+                                    <button onclick="manager.open2FA()" class="icon-btn btn-hover bg-indigo-600 hover:bg-indigo-700 text-white py-2 px-3 rounded-lg transition" title="2FA">
                                         ${this.state.twoFAEnabled ? '🔒' : '🔐'}
                                     </button>
-                                    <button onclick="manager.logout()" class="btn-hover bg-red-600 hover:bg-red-700 text-white text-xs py-1.5 px-2.5 rounded-lg transition" title="退出">🚪</button>
+                                    <button onclick="manager.logout()" class="icon-btn btn-hover bg-red-600 hover:bg-red-700 text-white py-2 px-3 rounded-lg transition" title="退出">🚪</button>
                                 </div>
                             </div>
                             <div class="flex flex-col lg:flex-row gap-6">
