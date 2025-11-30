@@ -108,19 +108,67 @@ function decryptPassword(encrypted, key) {
 }
 
 // ============ CORS Middleware ============
-router.options('*', () => new Response(null, {
-  status: 204,
-  headers: {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, POST, DELETE, PUT, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-  }
-}))
+// Allowed origins (可根据需要扩展)
+const ALLOWED_ORIGINS = [
+  'https://password.genghao880.workers.dev'
+]
 
-// Add CORS headers to all responses
-const addCors = (response) => {
-  response.headers.set('Access-Control-Allow-Origin', '*')
+// OPTIONS 预检
+router.options('*', (request) => {
+  const origin = request.headers.get('Origin')
+  const allowOrigin = origin && ALLOWED_ORIGINS.includes(origin) ? origin : 'https://password.genghao880.workers.dev'
+  return new Response(null, {
+    status: 204,
+    headers: {
+      'Access-Control-Allow-Origin': allowOrigin,
+      'Access-Control-Allow-Methods': 'GET, POST, DELETE, PUT, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      'Access-Control-Max-Age': '86400'
+    }
+  })
+})
+
+// 安全响应头 + CORS + RateLimit 头
+function applySecurityHeaders(response, request, rateInfo) {
+  const origin = request.headers.get('Origin')
+  const allowOrigin = origin && ALLOWED_ORIGINS.includes(origin) ? origin : 'https://password.genghao880.workers.dev'
+  const h = response.headers
+  h.set('Access-Control-Allow-Origin', allowOrigin)
+  h.set('Vary', 'Origin')
+  h.set('X-Content-Type-Options', 'nosniff')
+  h.set('X-Frame-Options', 'DENY')
+  h.set('Referrer-Policy', 'strict-origin-when-cross-origin')
+  h.set('Permissions-Policy', 'geolocation=(), microphone=(), camera=()')
+  h.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
+  h.set('Content-Security-Policy', "default-src 'self'; script-src 'self' https://cdn.tailwindcss.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.tailwindcss.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; upgrade-insecure-requests")
+  if (rateInfo) {
+    h.set('X-RateLimit-Limit', rateInfo.limit.toString())
+    h.set('X-RateLimit-Remaining', Math.max(rateInfo.limit - rateInfo.count, 0).toString())
+    h.set('X-RateLimit-Reset', rateInfo.reset.toString())
+  }
   return response
+}
+
+// 包装响应
+function addCors(response, request, rateInfo) {
+  return applySecurityHeaders(response, request, rateInfo)
+}
+
+// ============ Rate Limiting ============
+const RATE_LIMIT = 30
+const WINDOW_MS = 60_000
+const rateBuckets = new Map() // key -> {count, reset}
+
+function checkRateLimit(request) {
+  const ip = request.headers.get('CF-Connecting-IP') || 'unknown'
+  const now = Date.now()
+  let bucket = rateBuckets.get(ip)
+  if (!bucket || bucket.reset < now) {
+    bucket = { count: 0, reset: now + WINDOW_MS }
+  }
+  bucket.count += 1
+  rateBuckets.set(ip, bucket)
+  return { allowed: bucket.count <= RATE_LIMIT, count: bucket.count, limit: RATE_LIMIT, reset: Math.floor(bucket.reset / 1000) }
 }
 
 // ============ Auth Routes ============
@@ -130,25 +178,24 @@ router.post('/api/auth/register', async (request, env) => {
   try {
     const { email, password } = await request.json()
     if (!email || !password) {
-      return addCors(new Response(JSON.stringify({ error: 'email and password required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }))
+      return addCors(new Response(JSON.stringify({ error: 'email and password required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request)
     }
 
     // Basic server-side validation (avoid user enumeration / weak password acceptance)
     const emailRegex = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
     if (!emailRegex.test(email)) {
-      return addCors(new Response(JSON.stringify({ error: 'Invalid registration data' }), { status: 400, headers: { 'Content-Type': 'application/json' } }))
+      return addCors(new Response(JSON.stringify({ error: 'Invalid registration data' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request)
     }
     // Password policy: >=8 chars, include 3 of (lower, upper, number, symbol)
     const categories = [/[a-z]/, /[A-Z]/, /[0-9]/, /[^a-zA-Z0-9]/].reduce((acc, r) => acc + (r.test(password) ? 1 : 0), 0)
     if (password.length < 8 || categories < 3) {
-      return addCors(new Response(JSON.stringify({ error: 'Invalid registration data' }), { status: 400, headers: { 'Content-Type': 'application/json' } }))
+      return addCors(new Response(JSON.stringify({ error: 'Invalid registration data' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request)
     }
 
     // Check if user exists
     const existing = await env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(email).first()
     if (existing) {
-      // Generic message to avoid enumeration
-      return addCors(new Response(JSON.stringify({ error: 'Registration failed' }), { status: 400, headers: { 'Content-Type': 'application/json' } }))
+      return addCors(new Response(JSON.stringify({ error: 'Registration failed' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request)
     }
 
     // Hash password (PBKDF2)
@@ -160,9 +207,9 @@ router.post('/api/auth/register', async (request, env) => {
 
     const token = await generateToken(result.id)
 
-    return addCors(new Response(JSON.stringify({ user: result, token }), { status: 201, headers: { 'Content-Type': 'application/json' } }))
+    return addCors(new Response(JSON.stringify({ user: result, token }), { status: 201, headers: { 'Content-Type': 'application/json' } }), request)
   } catch (e) {
-    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }))
+    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }), request)
   }
 })
 
@@ -171,30 +218,30 @@ router.post('/api/auth/login', async (request, env) => {
   try {
     const { email, password } = await request.json()
     if (!email || !password) {
-      return addCors(new Response(JSON.stringify({ error: 'email and password required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }))
+      return addCors(new Response(JSON.stringify({ error: 'email and password required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request)
     }
 
     // Normalize email (defensive)
     const normalizedEmail = email.trim().toLowerCase()
     const emailRegex = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
     if (!emailRegex.test(normalizedEmail)) {
-      return addCors(new Response(JSON.stringify({ error: 'Invalid credentials' }), { status: 401, headers: { 'Content-Type': 'application/json' } }))
+      return addCors(new Response(JSON.stringify({ error: 'Invalid credentials' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request)
     }
     const user = await env.DB.prepare('SELECT id, password_hash FROM users WHERE email = ?').bind(normalizedEmail).first()
     if (!user) {
-      return addCors(new Response(JSON.stringify({ error: 'Invalid credentials' }), { status: 401, headers: { 'Content-Type': 'application/json' } }))
+      return addCors(new Response(JSON.stringify({ error: 'Invalid credentials' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request)
     }
 
     const isValid = await verifyPassword(password, user.password_hash)
     if (!isValid) {
-      return addCors(new Response(JSON.stringify({ error: 'Invalid credentials' }), { status: 401, headers: { 'Content-Type': 'application/json' } }))
+      return addCors(new Response(JSON.stringify({ error: 'Invalid credentials' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request)
     }
 
     const token = await generateToken(user.id)
 
-    return addCors(new Response(JSON.stringify({ user: { id: user.id, email: normalizedEmail }, token }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    return addCors(new Response(JSON.stringify({ user: { id: user.id, email: normalizedEmail }, token }), { status: 200, headers: { 'Content-Type': 'application/json' } }), request)
   } catch (e) {
-    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }))
+    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }), request)
   }
 })
 
@@ -205,7 +252,7 @@ router.get('/api/passwords', async (request, env) => {
   try {
     const userId = getUserFromRequest(request)
     if (!userId) {
-      return addCors(new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } }))
+      return addCors(new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request)
     }
 
     const stmt = env.DB.prepare('SELECT id, website, password, created_at FROM passwords WHERE user_id = ? ORDER BY created_at DESC')
@@ -217,9 +264,9 @@ router.get('/api/passwords', async (request, env) => {
       password: decryptPassword(p.password, `user_${userId}`)
     }))
 
-    return addCors(new Response(JSON.stringify(decrypted), { headers: { 'Content-Type': 'application/json' } }))
+    return addCors(new Response(JSON.stringify(decrypted), { headers: { 'Content-Type': 'application/json' } }), request)
   } catch (e) {
-    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }))
+    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }), request)
   }
 })
 
@@ -228,12 +275,12 @@ router.post('/api/passwords', async (request, env) => {
   try {
     const userId = getUserFromRequest(request)
     if (!userId) {
-      return addCors(new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } }))
+      return addCors(new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request)
     }
 
     const { website, password } = await request.json()
     if (!website || !password) {
-      return addCors(new Response(JSON.stringify({ error: 'website and password required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }))
+      return addCors(new Response(JSON.stringify({ error: 'website and password required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request)
     }
 
     // Encrypt password
@@ -242,9 +289,9 @@ router.post('/api/passwords', async (request, env) => {
     const stmt = env.DB.prepare('INSERT INTO passwords (user_id, website, password) VALUES (?, ?, ?) RETURNING id, website, created_at')
     const result = await stmt.bind(userId, website, encryptedPassword).first()
 
-    return addCors(new Response(JSON.stringify({ ...result, password }), { status: 201, headers: { 'Content-Type': 'application/json' } }))
+    return addCors(new Response(JSON.stringify({ ...result, password }), { status: 201, headers: { 'Content-Type': 'application/json' } }), request)
   } catch (e) {
-    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }))
+    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }), request)
   }
 })
 
@@ -253,26 +300,26 @@ router.delete('/api/passwords/:id', async (request, env) => {
   try {
     const userId = getUserFromRequest(request)
     if (!userId) {
-      return addCors(new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } }))
+      return addCors(new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request)
     }
 
     const { id } = request.params
     if (!id) {
-      return addCors(new Response(JSON.stringify({ error: 'id required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }))
+      return addCors(new Response(JSON.stringify({ error: 'id required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request)
     }
 
     // Verify ownership
     const exists = await env.DB.prepare('SELECT id FROM passwords WHERE id = ? AND user_id = ?').bind(id, userId).first()
     if (!exists) {
-      return addCors(new Response(JSON.stringify({ error: 'Password not found' }), { status: 404, headers: { 'Content-Type': 'application/json' } }))
+      return addCors(new Response(JSON.stringify({ error: 'Password not found' }), { status: 404, headers: { 'Content-Type': 'application/json' } }), request)
     }
 
     const stmt = env.DB.prepare('DELETE FROM passwords WHERE id = ? AND user_id = ?')
     await stmt.bind(id, userId).run()
 
-    return addCors(new Response(JSON.stringify({ success: true, id }), { headers: { 'Content-Type': 'application/json' } }))
+    return addCors(new Response(JSON.stringify({ success: true, id }), { headers: { 'Content-Type': 'application/json' } }), request)
   } catch (e) {
-    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }))
+    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }), request)
   }
 })
 
@@ -281,20 +328,20 @@ router.put('/api/passwords/:id', async (request, env) => {
   try {
     const userId = getUserFromRequest(request)
     if (!userId) {
-      return addCors(new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } }))
+      return addCors(new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } }), request)
     }
 
     const { id } = request.params
     const { website, password } = await request.json()
     
     if (!id || !website || !password) {
-      return addCors(new Response(JSON.stringify({ error: 'id, website and password required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }))
+      return addCors(new Response(JSON.stringify({ error: 'id, website and password required' }), { status: 400, headers: { 'Content-Type': 'application/json' } }), request)
     }
 
     // Verify ownership
     const exists = await env.DB.prepare('SELECT id FROM passwords WHERE id = ? AND user_id = ?').bind(id, userId).first()
     if (!exists) {
-      return addCors(new Response(JSON.stringify({ error: 'Password not found' }), { status: 404, headers: { 'Content-Type': 'application/json' } }))
+      return addCors(new Response(JSON.stringify({ error: 'Password not found' }), { status: 404, headers: { 'Content-Type': 'application/json' } }), request)
     }
 
     // Encrypt password
@@ -303,22 +350,28 @@ router.put('/api/passwords/:id', async (request, env) => {
     const stmt = env.DB.prepare('UPDATE passwords SET website = ?, password = ? WHERE id = ? AND user_id = ?')
     await stmt.bind(website, encryptedPassword, id, userId).run()
 
-    return addCors(new Response(JSON.stringify({ success: true, id, website }), { headers: { 'Content-Type': 'application/json' } }))
+    return addCors(new Response(JSON.stringify({ success: true, id, website }), { headers: { 'Content-Type': 'application/json' } }), request)
   } catch (e) {
-    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }))
+    return addCors(new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } }), request)
   }
 })
 
 // Fallback
-router.all('*', () => addCors(new Response('Not Found', { status: 404 })))
+router.all('*', (request) => addCors(new Response('Not Found', { status: 404 }), request))
 
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     
-    // Handle API routes first
+    // Rate limit & API 优先
+    let rateInfo = null
     if (url.pathname.startsWith('/api/')) {
-      return router.handle(request, env, ctx);
+      rateInfo = checkRateLimit(request)
+      if (!rateInfo.allowed) {
+        return applySecurityHeaders(new Response(JSON.stringify({ error: 'Rate limit exceeded' }), { status: 429, headers: { 'Content-Type': 'application/json' } }), request, rateInfo)
+      }
+      const apiResp = await router.handle(request, env, ctx)
+      return applySecurityHeaders(apiResp, request, rateInfo)
     }
     
     // Try to serve static assets
@@ -331,11 +384,8 @@ export default {
           headers.set('Cache-Control', 'no-cache, no-store, must-revalidate');
           headers.set('Pragma', 'no-cache');
           headers.set('Expires', '0');
-          return new Response(assetResponse.body, {
-            status: assetResponse.status,
-            statusText: assetResponse.statusText,
-            headers: headers
-          });
+          const resp = new Response(assetResponse.body, { status: assetResponse.status, statusText: assetResponse.statusText, headers })
+          return applySecurityHeaders(resp, request)
         }
       } catch (e) {
         // Asset not found, continue
@@ -343,6 +393,7 @@ export default {
     }
     
     // Fallback to router for other requests
-    return router.handle(request, env, ctx);
+    const r = await router.handle(request, env, ctx)
+    return applySecurityHeaders(r, request)
   }
 }
