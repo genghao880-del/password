@@ -62,6 +62,34 @@ export async function generateToken(userId: number, env: { JWT_SECRET?: string }
   return `${header}.${payload}.${signature}`;
 }
 
+// Generate temporary 2FA token (5 minutes)
+export async function generateTemp2FAToken(userId: number, env: { JWT_SECRET?: string }): Promise<string> {
+  const header = btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
+  const payload = btoa(JSON.stringify({
+    userId,
+    twofa: 'pending',
+    exp: Math.floor(Date.now() / 1000) + 300 // 5 minutes
+  }));
+  const secret = env?.JWT_SECRET || '';
+  if (!secret) throw new Error('Missing JWT_SECRET');
+  const signature = await hmacSHA256(`${header}.${payload}`, secret);
+  return `${header}.${payload}.${signature}`;
+}
+
+// Decode JWT token without verification (for reading payload)
+export function decodeToken(token: string): any {
+  try {
+    if (!token) return null;
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const payload = JSON.parse(atob(parts[1]));
+    if (payload.exp < Math.floor(Date.now() / 1000)) return null;
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
 // Verify JWT token
 export async function verifyToken(token: string, env: { JWT_SECRET?: string }): Promise<number | null> {
   try {
