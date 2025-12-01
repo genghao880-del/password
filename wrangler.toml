@@ -10,13 +10,13 @@ directory = "public"
 
 # Environment variables (optional)
 [vars]
-CUSTOM_DOMAIN = "661985.xyz"
+CUSTOM_DOMAIN = "new.661985.xyz"
 TURNSTILE_SITE_KEY = "0x4AAAAAACDySILJANkPJslg"
 TURNSTILE_ENFORCE = "true"
 
 # Bind custom domain route to this Worker
 routes = [
-	{ pattern = "661985.xyz", custom_domain = true }
+	{ pattern = "new.661985.xyz", custom_domain = true }
 ]
 
 # 文档与展示约定：
