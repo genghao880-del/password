@@ -116,63 +116,6 @@ async function hmacSHA256(message, secret) {
   return bytesToBase64(new Uint8Array(sig))
 }
 
-async function generateToken(userId, env) {
-  const header = btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))
-  const payload = btoa(JSON.stringify({
-    userId,
-    exp: Math.floor(Date.now() / 1000) + 86400 * 7 // 7 days
-  }))
-  const secret = env?.JWT_SECRET || ''
-  if (!secret) throw new Error('Missing JWT_SECRET')
-  const signature = await hmacSHA256(`${header}.${payload}`, secret)
-  return `${header}.${payload}.${signature}`
-}
-
-// Temporary JWT for pending 2FA (short lifetime 5m)
-async function generateTemp2FAToken(userId, env) {
-  const header = btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))
-  const payload = btoa(JSON.stringify({ userId, twofa: 'pending', exp: Math.floor(Date.now() / 1000) + 300 }))
-  const secret = env?.JWT_SECRET || ''
-  if (!secret) throw new Error('Missing JWT_SECRET')
-  const signature = await hmacSHA256(`${header}.${payload}`, secret)
-  return `${header}.${payload}.${signature}`
-}
-
-// Verify JWT token with improved error handling
-function verifyToken(token, env) {
-  try {
-    if (!token) return null
-    
-    const parts = token.split('.')
-    if (parts.length !== 3) return null
-    
-    const [header, payload, signature] = parts
-    const decoded = JSON.parse(atob(payload))
-    
-    if (decoded.exp < Math.floor(Date.now() / 1000)) {
-      return null
-    }
-    
-    const secret = env?.JWT_SECRET
-    if (!secret) {
-      console.error('JWT_SECRET is not configured in environment variables')
-      return null
-    }
-    
-    // verify signature
-    return crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['verify'])
-      .then(key => crypto.subtle.verify('HMAC', key, base64ToBytes(signature), new TextEncoder().encode(`${header}.${payload}`)))
-      .then(ok => ok ? decoded.userId : null)
-      .catch(err => {
-        console.error('JWT verification failed:', err)
-        return null
-      })
-  } catch (err) {
-    console.error('Error parsing JWT token:', err)
-    return null
-  }
-}
-
 // ============ CORS Middleware ============
 // 从环境变量或请求自动检测允许的�?
 function getAllowedOrigins(env, request) {
