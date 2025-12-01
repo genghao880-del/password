@@ -26,5 +26,5 @@ routes = [
 # D1 Database
 [[d1_databases]]
 binding = "DB"
-database_name = "password"
-database_id = "523df01e-9a94-4972-bea8-7b12968f5395"
+database_name = "password-new"
+database_id = "f08abf61-f4f0-4d11-80c8-15aee4f23cd7"
