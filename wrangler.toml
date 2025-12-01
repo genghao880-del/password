@@ -12,7 +12,7 @@ directory = "public"
 [vars]
 CUSTOM_DOMAIN = "new.661985.xyz"
 TURNSTILE_SITE_KEY = "0x4AAAAAACDySILJANkPJslg"
-TURNSTILE_ENFORCE = "true"
+TURNSTILE_ENFORCE = "false"
 
 # Bind custom domain route to this Worker
 routes = [
