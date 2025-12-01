@@ -1,4 +1,4 @@
-name = "password"
+name = "new-password"
 compatibility_date = "2024-05-01"
 
 # Worker entry for API routes
