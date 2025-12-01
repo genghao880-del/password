@@ -173,40 +173,6 @@ function verifyToken(token, env) {
   }
 }
 
-function decodeToken(token, env) {
-  try {
-    if (!token) return null
-    
-    const parts = token.split('.')
-    if (parts.length !== 3) return null
-    
-    const [header, payload, signature] = parts
-    const decoded = JSON.parse(atob(payload))
-    
-    if (decoded.exp < Math.floor(Date.now() / 1000)) return null
-    
-    const secret = env?.JWT_SECRET
-    if (!secret) {
-      console.error('JWT_SECRET is not configured in environment variables')
-      return null
-    }
-    
-    return crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['verify'])
-      .then(key => crypto.subtle.verify('HMAC', key, base64ToBytes(signature), new TextEncoder().encode(`${header}.${payload}`)))
-      .then(ok => ok ? decoded : null)
-      .catch(err => {
-        console.error('JWT decoding failed:', err)
-        return null
-      })
-  } catch (err) {
-    console.error('Error decoding JWT token:', err)
-    return null
-  }
-}
-
-
-
-
 // ============ CORS Middleware ============
 // 从环境变量或请求自动检测允许的�?
 function getAllowedOrigins(env, request) {
